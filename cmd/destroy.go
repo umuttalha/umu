@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -106,6 +107,8 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 
 		// 3. Delete disks (skip shared read-only root images)
 		if !destroyKeepDisk {
+			log.Printf("[destroy] cleaning disks for %s/%s (DiskPath=%s, RootReadOnly=%v, UserDataDisk=%s)\n",
+				projectName, svc.Name, svc.DiskPath, svc.RootReadOnly, svc.UserDataDisk)
 			fmt.Printf("  ● Cleaning up disk images...")
 
 			// Delete persistent state disk (Storage Box)
@@ -121,19 +124,24 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 				storage.DeleteUserDataDisk(userDataName)
 			}
 
-			// Delete root disk — never delete the shared read-only base image
+			// Delete root disk — never delete shared read-only base images
 			if svc.DiskPath != "" && !svc.RootReadOnly {
 				diskName := strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4")
-				storage.DeleteDisk(diskName)
-				// Also try legacy unversioned name
-				legacyName := fmt.Sprintf("%s-%s", projectName, svc.Name)
-				if diskName != legacyName {
-					storage.DeleteDisk(legacyName)
+				if !storage.IsSharedBaseImage(diskName) {
+					storage.DeleteDisk(diskName)
+					// Also try legacy unversioned name
+					legacyName := fmt.Sprintf("%s-%s", projectName, svc.Name)
+					if diskName != legacyName && !storage.IsSharedBaseImage(legacyName) {
+						storage.DeleteDisk(legacyName)
+					}
 				}
-			} else if svc.DiskPath == "" {
-				// Legacy fallback when DiskPath is empty
-				storage.DeleteDisk(fmt.Sprintf("%s-%s", projectName, svc.Name))
+		} else if svc.DiskPath == "" {
+			// Legacy fallback when DiskPath is empty
+			legacyName := fmt.Sprintf("%s-%s", projectName, svc.Name)
+			if !storage.IsSharedBaseImage(legacyName) {
+				storage.DeleteDisk(legacyName)
 			}
+		}
 			fmt.Printf(" done\n")
 		}
 

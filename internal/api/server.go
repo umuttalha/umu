@@ -430,10 +430,17 @@ func (s *Server) destroyProject(w http.ResponseWriter, r *http.Request, name str
 			routing.RemoveRoute(routeHostname)
 		}
 		if svc.UserDataDisk != "" {
-			storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4"))
+			udName := strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4")
+			if !storage.IsSharedBaseImage(udName) {
+				storage.DeleteUserDataDisk(udName)
+			}
 		}
+		// Delete per-project root disk. Never delete shared read-only base images.
 		if svc.DiskPath != "" && !svc.RootReadOnly {
-			storage.DeleteDisk(strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4"))
+			diskName := strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4")
+			if !storage.IsSharedBaseImage(diskName) {
+				storage.DeleteDisk(diskName)
+			}
 		}
 	}
 

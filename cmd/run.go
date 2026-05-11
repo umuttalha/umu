@@ -93,8 +93,8 @@ func runFunction(cmd *cobra.Command, args []string) error {
 	var rootReadOnly bool
 	var userDataDisk string
 
-	if storage.SharedRootExists(cfg.Runtime) {
-		diskPath = storage.GetSharedRootImage(cfg.Runtime)
+	if storage.SharedRootExists(sCfg.Runtime) {
+		diskPath = storage.GetSharedRootImage(sCfg.Runtime)
 		rootReadOnly = true
 
 		dataDiskName := fmt.Sprintf("data-%s-%s", projectName, sCfg.Name)

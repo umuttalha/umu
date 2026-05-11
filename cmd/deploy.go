@@ -71,6 +71,9 @@ func validateProjectName(name string) error {
 	if !projectNameRegex.MatchString(name) {
 		return fmt.Errorf("invalid project name %q: must be 3-64 chars, lowercase alphanumeric, hyphens, and dots", name)
 	}
+	if storage.IsSharedBaseImage(name) {
+		return fmt.Errorf("invalid project name %q: name collides with a shared base image", name)
+	}
 	return nil
 }
 
@@ -114,7 +117,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	project := &state.Project{
 		Name:      projectName,
 		Status:    state.StatusCreating,
-		Runtime:   cfg.Runtime,
+		Runtime:   cfg.Services[0].Runtime,
 		Services:  []*state.Service{},
 		CreatedAt: time.Now(),
 	}
@@ -151,23 +154,24 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	hostsString := strings.Join(hostsMapping, ",")
 
-	// Pre-check shared root image and Storage Box availability
-	useSharedRoot := storage.SharedRootExists(cfg.Runtime)
+	// Pre-check Storage Box availability
+	useSharedRoot := storage.SharedRootExists(cfg.Services[0].Runtime)
 	storageBoxAvailable := storage.IsStorageBoxAvailable()
 
-	// Validate pip dependencies against shared base manifest
-	if useSharedRoot {
-		for _, sCfg := range cfg.Services {
-			reqPath := filepath.Join(cwd, sCfg.BuildDir, "requirements.txt")
-			if _, err := os.Stat(reqPath); err == nil {
-				missing, err := deps.CheckFromBase(reqPath, storage.GetSharedRootImage(cfg.Runtime))
-				if err != nil {
-					fmt.Printf("  warning: dependency check failed: %v\n", err)
-				} else if len(missing) > 0 {
-					fmt.Printf("  warning: %d package(s) not in shared base, will be installed at boot:\n", len(missing))
-					for _, pkg := range missing {
-						fmt.Printf("    - %s\n", pkg)
-					}
+	// Validate pip dependencies against shared base manifest (per-service)
+	for _, sCfg := range cfg.Services {
+		if !storage.SharedRootExists(sCfg.Runtime) {
+			continue
+		}
+		reqPath := filepath.Join(cwd, sCfg.BuildDir, "requirements.txt")
+		if _, err := os.Stat(reqPath); err == nil {
+			missing, err := deps.CheckFromBase(reqPath, storage.GetSharedRootImage(sCfg.Runtime))
+			if err != nil {
+				fmt.Printf("  warning: dependency check failed: %v\n", err)
+			} else if len(missing) > 0 {
+				fmt.Printf("  warning: %d package(s) not in shared base, will be installed at boot:\n", len(missing))
+				for _, pkg := range missing {
+					fmt.Printf("    - %s\n", pkg)
 				}
 			}
 		}
@@ -194,10 +198,10 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 		ephemeral := !sCfg.AlwaysOn && len(sCfg.Volumes) == 0
 
-		if useSharedRoot {
+		if storage.SharedRootExists(sCfg.Runtime) {
 			var dataDiskPath string
 
-			if storageBoxAvailable && stateDiskErr == nil {
+			if sCfg.Storage != "local" && storageBoxAvailable && stateDiskErr == nil {
 				dataDiskPath = stateDiskPath
 				st.stateDisk = stateDiskPath
 			} else {
@@ -213,7 +217,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 					return st
 				}
 			}
-			st.diskPath = storage.GetSharedRootImage(cfg.Runtime)
+			st.diskPath = storage.GetSharedRootImage(sCfg.Runtime)
 			st.rootReadOnly = true
 			st.userDataDisk = dataDiskPath
 
@@ -222,7 +226,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			}
 
 			// For ephemeral VMs: save source to Storage Box state disk for restore on unfreeze
-			if ephemeral && storageBoxAvailable && st.stateDisk == "" {
+			if sCfg.Storage != "local" && ephemeral && storageBoxAvailable && st.stateDisk == "" {
 				statePath, err := storage.CreateStateDisk(projectName, sCfg.Name)
 				if err == nil {
 					storage.InjectSourceIntoDisk(statePath, serviceDir)
@@ -245,7 +249,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			}
 
 			// For ephemeral VMs in full-clone mode: save source to Storage Box for restore
-			if ephemeral && storageBoxAvailable {
+			if sCfg.Storage != "local" && ephemeral && storageBoxAvailable {
 				statePath, err := storage.CreateStateDisk(projectName, sCfg.Name)
 				if err == nil {
 					storage.InjectSourceIntoDisk(statePath, serviceDir)
@@ -299,7 +303,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		var stateDiskErr error
 		stateDiskDone := make(chan struct{})
 
-		if useSharedRoot {
+		if useSharedRoot && sCfg.Storage != "local" {
 			stateDiskStarted = true
 			go func() {
 				defer close(stateDiskDone)
@@ -336,7 +340,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 				var stateDiskErr error
 				stateDiskDone := make(chan struct{})
 
-				if useSharedRoot {
+		if useSharedRoot && sCfg.Storage != "local" {
 					stateDiskStarted = true
 					go func() {
 						defer close(stateDiskDone)
@@ -491,7 +495,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 				continue
 			}
 			g.Go(func() error {
-				return health.CheckWithTimeout(plans[i].guestIP, deployPort, 5*time.Second, 100*time.Millisecond)
+				return health.CheckWithTimeout(plans[i].guestIP, deployPort, 10*time.Second, 100*time.Millisecond)
 			})
 		}
 		if err := g.Wait(); err != nil {
@@ -503,7 +507,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		for i := range plans {
 			if plans[i].sCfg.Expose {
 				fmt.Printf("  ● Waiting for VM to boot...")
-				if err := health.CheckWithTimeout(plans[i].guestIP, deployPort, 5*time.Second, 100*time.Millisecond); err != nil {
+				if err := health.CheckWithTimeout(plans[i].guestIP, deployPort, 10*time.Second, 100*time.Millisecond); err != nil {
 					fmt.Printf(" warning: %v\n", err)
 				} else {
 					fmt.Printf(" done\n")
@@ -612,7 +616,7 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 		var stateDiskErr error
 		stateDiskDone := make(chan struct{})
 
-		if storage.SharedRootExists(existing.Runtime) {
+		if sCfg.Storage != "local" && storage.SharedRootExists(sCfg.Runtime) {
 			stateDiskStarted = true
 			go func() {
 				defer close(stateDiskDone)
@@ -640,18 +644,18 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 			<-stateDiskDone
 		}
 
-		if storage.SharedRootExists(existing.Runtime) {
+		if storage.SharedRootExists(sCfg.Runtime) {
 			var dataDiskPath string
 
 			fmt.Printf("  ● Using shared read-only root + user data disk...")
-			sharedRootPath := storage.GetSharedRootImage(existing.Runtime)
+			sharedRootPath := storage.GetSharedRootImage(sCfg.Runtime)
 			if err := storage.VerifyRootfsChecksum(sharedRootPath); err != nil {
 				fmt.Printf("\n  warning: shared root image checksum: %v (run 'umut checksum regenerate' to fix)\n", err)
 			}
 			diskPath = sharedRootPath
 			rootReadOnly = true
 
-			if stateDiskErr == nil && storage.IsStorageBoxAvailable() {
+			if sCfg.Storage != "local" && stateDiskErr == nil && storage.IsStorageBoxAvailable() {
 				dataDiskPath = stateDiskPath
 				stateDisk = stateDiskPath
 				fmt.Printf("\n  ● Attached persistent state disk from Storage Box")
@@ -824,14 +828,17 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 				}
 			}
 
-			// Clean up old disks. Skip shared root images (only delete per-VM disks).
-			// Never delete state disks on Storage Box — they persist across updates.
-			if oldSvc.UserDataDisk != "" && oldSvc.StateDisk == "" {
-				storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(oldSvc.UserDataDisk), ".ext4"))
+		// Clean up old disks. Skip shared root images (only delete per-VM disks).
+		// Never delete state disks on Storage Box — they persist across updates.
+		if oldSvc.UserDataDisk != "" && oldSvc.StateDisk == "" {
+			storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(oldSvc.UserDataDisk), ".ext4"))
+		}
+		if oldSvc.DiskPath != "" && !oldSvc.RootReadOnly {
+			diskName := strings.TrimSuffix(filepath.Base(oldSvc.DiskPath), ".ext4")
+			if !storage.IsSharedBaseImage(diskName) {
+				storage.DeleteDisk(diskName)
 			}
-			if oldSvc.DiskPath != "" && !oldSvc.RootReadOnly {
-				storage.DeleteDisk(strings.TrimSuffix(filepath.Base(oldSvc.DiskPath), ".ext4"))
-			}
+		}
 
 			fmt.Printf(" done\n")
 		}
@@ -902,13 +909,16 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 				}
 				routing.RemoveRoute(routeHostname)
 			}
-			if svc.UserDataDisk != "" {
-				storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4"))
+		if svc.UserDataDisk != "" {
+			storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4"))
+		}
+		if svc.DiskPath != "" && !svc.RootReadOnly {
+			diskName := strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4")
+			if !storage.IsSharedBaseImage(diskName) {
+				storage.DeleteDisk(diskName)
 			}
-			if svc.DiskPath != "" && !svc.RootReadOnly {
-				storage.DeleteDisk(strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4"))
-			}
-			fmt.Printf("  done\n")
+		}
+		fmt.Printf("  done\n")
 		}
 	}
 	existing.Services = keptServices

@@ -154,3 +154,61 @@ func TestEphemeralDetectionLogic(t *testing.T) {
 		})
 	}
 }
+
+func TestStorageFieldDefault(t *testing.T) {
+	cfg := Default()
+	if cfg.Services[0].Storage != "" {
+		t.Errorf("expected empty storage default, got %q", cfg.Services[0].Storage)
+	}
+}
+
+func TestStorageFieldLocal(t *testing.T) {
+	tempDir := t.TempDir()
+	tomlPath := filepath.Join(tempDir, "umut.toml")
+
+	tomlContent := []byte("[[services]]\nname = \"main\"\nstorage = \"local\"\n")
+	if err := os.WriteFile(tomlPath, tomlContent, 0644); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+
+	cfg, err := Load(tempDir)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Services[0].Storage != "local" {
+		t.Errorf("expected storage 'local', got %q", cfg.Services[0].Storage)
+	}
+}
+
+func TestStorageFieldStorageBox(t *testing.T) {
+	tempDir := t.TempDir()
+	tomlPath := filepath.Join(tempDir, "umut.toml")
+
+	tomlContent := []byte("[[services]]\nname = \"main\"\nstorage = \"storagebox\"\n")
+	if err := os.WriteFile(tomlPath, tomlContent, 0644); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+
+	cfg, err := Load(tempDir)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Services[0].Storage != "storagebox" {
+		t.Errorf("expected storage 'storagebox', got %q", cfg.Services[0].Storage)
+	}
+}
+
+func TestStorageFieldInvalid(t *testing.T) {
+	tempDir := t.TempDir()
+	tomlPath := filepath.Join(tempDir, "umut.toml")
+
+	tomlContent := []byte("[[services]]\nname = \"main\"\nstorage = \"nvme\"\n")
+	if err := os.WriteFile(tomlPath, tomlContent, 0644); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+
+	_, err := Load(tempDir)
+	if err == nil {
+		t.Fatal("expected error for invalid storage value")
+	}
+}

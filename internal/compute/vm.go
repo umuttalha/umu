@@ -147,10 +147,13 @@ func StartVM(cfg VMConfig) (*RunningVM, error) {
 	// Clean previous jail directory (leftover from crash / unclean exit)
 	jailDir := filepath.Join(JailerBaseDir, "firecracker", cfg.ProjectName)
 
-	// Unmount any stale storage box project bind mounts before cleaning
-	unmountStorageBoxProjects(filepath.Join(jailDir, "root"))
-
-	os.RemoveAll(jailDir)
+	if isSafeJailerPath(jailDir) {
+		// Unmount any stale storage box project bind mounts before cleaning
+		unmountStorageBoxProjects(filepath.Join(jailDir, "root"))
+		os.RemoveAll(jailDir)
+	} else {
+		log.Warnf("skipping jailer cleanup: unsafe path %q for project %q", jailDir, cfg.ProjectName)
+	}
 
 	// Ensure log directory exists
 	if err := os.MkdirAll(LogDir, 0755); err != nil {
@@ -281,7 +284,9 @@ func StartVM(cfg VMConfig) (*RunningVM, error) {
 		if needsStorageBox {
 			unmountStorageBoxProjects(jailerRoot)
 		}
-		os.RemoveAll(jailDir)
+		if isSafeJailerPath(jailDir) {
+			os.RemoveAll(jailDir)
+		}
 		return nil, fmt.Errorf("start firecracker VM: %w", err)
 	}
 
@@ -314,7 +319,9 @@ func StartVM(cfg VMConfig) (*RunningVM, error) {
 		// DO NOT os.RemoveAll — the bind mount exposes the real CIFS files
 
 		// Clean up jailer chroot directory for this VM
-		os.RemoveAll(jailDir)
+		if isSafeJailerPath(jailDir) {
+			os.RemoveAll(jailDir)
+		}
 		CleanupCgroup(cfg.ProjectName)
 	}()
 
@@ -384,13 +391,34 @@ func StopVMByPID(pid int, socketPath string) error {
 	// Clean up jailer directory and unmount storage box bind mounts.
 	// The background Wait() goroutine in StartVM handles this for daemon-managed
 	// VMs, but CLI commands (deploy/destroy) exit before the goroutine runs.
-	// socketPath: .../firecracker/<id>/root/<id>.sock
-	jailerRoot := filepath.Dir(socketPath)           // .../firecracker/<id>/root
-	jailDir := filepath.Dir(jailerRoot)              // .../firecracker/<id>
-	unmountStorageBoxProjects(jailerRoot)
-	os.RemoveAll(jailDir)
+	// CRITICAL: Only clean up when socketPath is valid. An empty or invalid
+	// socketPath causes filepath.Dir("") → "." which would make os.RemoveAll(".")
+	// delete the current working directory (e.g. /var/lib/umut/images/).
+	if socketPath != "" {
+		jailerRoot := filepath.Dir(socketPath)
+		jailDir := filepath.Dir(jailerRoot)
+		if isSafeJailerPath(jailDir) {
+			unmountStorageBoxProjects(jailerRoot)
+			os.RemoveAll(jailDir)
+		} else {
+			log.Warnf("skipping jailer cleanup: unsafe path %q derived from socketPath %q", jailDir, socketPath)
+		}
+	}
 
 	return nil
+}
+
+// isSafeJailerPath validates that a path is a safe jailer directory to remove.
+// Prevents catastrophic data loss from empty/malformed socket paths.
+func isSafeJailerPath(path string) bool {
+	if path == "" || path == "." || path == "/" {
+		return false
+	}
+	cleaned := filepath.Clean(path)
+	if cleaned == filepath.Clean(JailerBaseDir) {
+		return false
+	}
+	return strings.HasPrefix(cleaned, filepath.Clean(JailerBaseDir)+"/")
 }
 
 // CgroupNameFromSocketPath derives the cgroup name from a VM's socket path.

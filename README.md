@@ -38,6 +38,64 @@ umut deploy myproject
 export UMUT_DATA_DIR=/mnt/nvme/umut
 ```
 
+## Storage Model
+
+### Where your files go
+
+Every VM gets a **data disk** mounted at `/workspace` inside the VM. When your code writes a file — `pd.to_csv('/workspace/output.csv')` or `sqlite3.connect('/workspace/data.db')` — it lands on this disk.
+
+**Where that disk physically lives:**
+
+```
+Your code writes to /workspace
+        │
+        ▼
+   Data disk (.ext4 file) on host
+        │
+        ▼
+┌──────────────────────────────────┐
+│  NVMe (UMUT_DATA_DIR)            │  ← Hot: active VMs only
+│  /mnt/nvme/umut/images/          │    ~3 GB/s read/write
+│                                  │
+│  Storage Box                     │  ← Cold: persistent state
+│  /mnt/storagebox/projects/       │    ~100 MB/s (network)
+└──────────────────────────────────┘
+```
+
+| Disk | Lives on | Speed | Purpose |
+|------|----------|-------|---------|
+| Base images (shared, read-only) | NVMe | 3 GB/s | Python + Deno runtimes, shared across all VMs |
+| Data disk (active VM) | NVMe | 3 GB/s | `/workspace` for running code — CSV, SQLite, temp files |
+| State disk (frozen VM) | Storage Box | 100 MB/s | Persists source code + data across freeze/unfreeze |
+
+### NVMe is a cache, Storage Box is the truth
+
+At 10K projects, you can't keep every project's data disk on NVMe. The model:
+
+```
+Cold project (not running)
+  └─ Source + state → Storage Box     (unlimited, 10TB scalable)
+  └─ Nothing on NVMe                  (zero local space)
+
+Project triggered
+  └─ Source restored → NVMe data disk  (fast execution)
+  └─ VM runs, writes data freely
+
+Project frozen (idle timeout)
+  └─ Data synced → Storage Box        (persistent)
+  └─ NVMe data disk deleted           (space reclaimed)
+```
+
+**Result:** Base images (5 GB) + ~200 active VM data disks (~10 GB) = **~15 GB on NVMe**. 385 GB free.
+
+### Per-runtime disk sizes
+
+| Runtime | Typical data disk | Why |
+|---------|------------------|-----|
+| Deno | 16 MB | Small scripts, few dependencies |
+| Python | 64 MB | pip packages, larger scripts |
+| Python + volumes | 64 MB + volume | Heavy data workloads, SQLite, CSV |
+
 ## Configuration
 
 ```toml
@@ -64,7 +122,7 @@ volumes = ["/data/vol"]   # persistent storage
 | `expose` | `true` | Add Caddy reverse proxy route |
 | `volumes` | `[]` | Persistent volume mount paths |
 
-### Storage
+### Storage path
 
 Set `UMUT_DATA_DIR` to move all VM data to a different disk:
 
@@ -72,17 +130,17 @@ Set `UMUT_DATA_DIR` to move all VM data to a different disk:
 export UMUT_DATA_DIR=/mnt/nvme/umut
 ```
 
-All derived paths:
+Derived paths:
 ```
 $UMUT_DATA_DIR/
-├── images/          # base images, VM disks, volumes
+├── images/          # base images, VM data disks, volumes
 ├── sockets/         # Firecracker API sockets
 ├── logs/            # VM console logs
 ├── state.db         # SQLite project state
 └── vmlinux          # kernel image
 ```
 
-System paths (`/srv/jailer`, `/usr/local/bin/firecracker`, `/mnt/storagebox`) are unaffected.
+System paths (`/srv/jailer`, `/usr/local/bin/firecracker`, `/mnt/storagebox`) stay hardcoded.
 
 ## Commands
 

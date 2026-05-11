@@ -248,8 +248,21 @@ SERVICE
     # Enable the network service
     chroot "$MOUNT_DIR" systemctl enable umut-network.service > /dev/null 2>&1 || true
 
+    # Create /workspace directory on the rootfs so shared-root VMs have a mount point
+    mkdir -p "$MOUNT_DIR/workspace"
+    chmod 0755 "$MOUNT_DIR/workspace"
+
     # Set hostname
     echo "umut-vm" > "$MOUNT_DIR/etc/hostname"
+
+    # Install umut-init as /sbin/init so VMs auto-start user apps
+    if [[ -f /usr/local/bin/umut-init ]]; then
+        rm -f "$MOUNT_DIR/sbin/init"
+        cp /usr/local/bin/umut-init "$MOUNT_DIR/sbin/init"
+        chmod +x "$MOUNT_DIR/sbin/init"
+        info "umut-init installed as PID 1 on base image"
+    fi
+
     umount "$MOUNT_DIR"
     rmdir "$MOUNT_DIR"
 
@@ -274,14 +287,32 @@ if [ ! -f "$UMUT_DIR/images/python-base.ext4" ]; then
 
     cp /etc/resolv.conf "$MOUNT_DIR/etc/resolv.conf"
 
-    mkdir -p "$MOUNT_DIR/var/lib/dpkg/info" "$MOUNT_DIR/var/lib/dpkg/updates"
+    # Force IPv4 for apt (avoids IPv6 timeouts in chroot environments)
+    mkdir -p "$MOUNT_DIR/etc/apt/apt.conf.d"
+    echo 'Acquire::ForceIPv4 "true";' > "$MOUNT_DIR/etc/apt/apt.conf.d/99force-ipv4"
+
+    mkdir -p "$MOUNT_DIR/var/lib/dpkg/info" "$MOUNT_DIR/var/lib/dpkg/updates" "$MOUNT_DIR/var/log/apt"
     touch "$MOUNT_DIR/var/lib/dpkg/status" "$MOUNT_DIR/var/lib/dpkg/available"
 
+    # Stop host's apt-daily to prevent lock contention
+    systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+    systemctl stop apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+    pkill -f "apt-get|dpkg" 2>/dev/null || true
+    sleep 2
+
     info "Installing Python 3.12 into python-base..."
-    chroot "$MOUNT_DIR" apt-get update -qq 2>/dev/null
+    for i in 1 2 3; do
+        chroot "$MOUNT_DIR" apt-get update -qq 2>/dev/null && break
+        warn "apt-get update attempt $i failed, retrying in 5s..."
+        sleep 5
+    done
     chroot "$MOUNT_DIR" apt-get install -y -qq software-properties-common 2>/dev/null || true
     chroot "$MOUNT_DIR" add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
-    chroot "$MOUNT_DIR" apt-get update -qq 2>/dev/null
+    for i in 1 2 3; do
+        chroot "$MOUNT_DIR" apt-get update -qq 2>/dev/null && break
+        warn "apt-get update (post-PPA) attempt $i failed, retrying in 5s..."
+        sleep 5
+    done
     chroot "$MOUNT_DIR" apt-get install -y -qq python3.12 python3.12-venv python3.12-dev 2>/dev/null || \
     chroot "$MOUNT_DIR" apt-get install -y -qq python3 python3-pip python3-venv 2>/dev/null || true
 
@@ -334,6 +365,22 @@ MANIFEST
 
     rm -f "$MOUNT_DIR/etc/resolv.conf"
 
+    # Verify Python was installed
+    if ! chroot "$MOUNT_DIR" which python3.12 >/dev/null 2>&1 && \
+       ! chroot "$MOUNT_DIR" which python3 >/dev/null 2>&1; then
+        warn "Python installation failed — python3 not found in chroot (shared root will still work with base Python)"
+    else
+        info "Python verified in shared root image"
+    fi
+
+    # Install umut-init as /sbin/init so VMs auto-start user apps
+    if [[ -f /usr/local/bin/umut-init ]]; then
+        rm -f "$MOUNT_DIR/sbin/init"
+        cp /usr/local/bin/umut-init "$MOUNT_DIR/sbin/init"
+        chmod +x "$MOUNT_DIR/sbin/init"
+        info "umut-init installed as PID 1 on python-base"
+    fi
+
     umount "$MOUNT_DIR"
     rmdir "$MOUNT_DIR"
     sha256sum "$UMUT_DIR/images/python-base.ext4" > "$UMUT_DIR/checksums/python-base.ext4.sha256"
@@ -354,11 +401,19 @@ if [ ! -f "$UMUT_DIR/images/deno-base.ext4" ]; then
 
     cp /etc/resolv.conf "$MOUNT_DIR/etc/resolv.conf"
 
-    mkdir -p "$MOUNT_DIR/var/lib/dpkg/info" "$MOUNT_DIR/var/lib/dpkg/updates"
+    # Force IPv4 for apt (avoids IPv6 timeouts in chroot environments)
+    mkdir -p "$MOUNT_DIR/etc/apt/apt.conf.d"
+    echo 'Acquire::ForceIPv4 "true";' > "$MOUNT_DIR/etc/apt/apt.conf.d/99force-ipv4"
+
+    mkdir -p "$MOUNT_DIR/var/lib/dpkg/info" "$MOUNT_DIR/var/lib/dpkg/updates" "$MOUNT_DIR/var/log/apt"
     touch "$MOUNT_DIR/var/lib/dpkg/status" "$MOUNT_DIR/var/lib/dpkg/available"
 
     info "Installing Deno into deno-base..."
-    chroot "$MOUNT_DIR" apt-get update -qq 2>/dev/null
+    for i in 1 2 3; do
+        chroot "$MOUNT_DIR" apt-get update -qq 2>/dev/null && break
+        warn "apt-get update attempt $i failed, retrying in 5s..."
+        sleep 5
+    done
     chroot "$MOUNT_DIR" apt-get install -y -qq curl unzip 2>/dev/null || true
 
     chroot "$MOUNT_DIR" bash -c '
@@ -370,6 +425,14 @@ if [ ! -f "$UMUT_DIR/images/deno-base.ext4" ]; then
     echo "deno" > "$MOUNT_DIR/etc/umut-packages.txt"
 
     rm -f "$MOUNT_DIR/etc/resolv.conf"
+
+    # Install umut-init as /sbin/init so VMs auto-start user apps
+    if [[ -f /usr/local/bin/umut-init ]]; then
+        rm -f "$MOUNT_DIR/sbin/init"
+        cp /usr/local/bin/umut-init "$MOUNT_DIR/sbin/init"
+        chmod +x "$MOUNT_DIR/sbin/init"
+        info "umut-init installed as PID 1 on deno-base"
+    fi
 
     umount "$MOUNT_DIR"
     rmdir "$MOUNT_DIR"

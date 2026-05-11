@@ -3,9 +3,11 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -70,18 +72,9 @@ func CloneDisk(projectName string) (string, error) {
 }
 
 // DeleteDisk removes a project's disk image.
+// Refuses to delete shared read-only base images regardless of caller.
 func DeleteDisk(projectName string) error {
-	diskPath := filepath.Join(ImagesDir, projectName+".ext4")
-
-	if _, err := os.Stat(diskPath); os.IsNotExist(err) {
-		return nil // Already gone
-	}
-
-	if err := os.Remove(diskPath); err != nil {
-		return fmt.Errorf("delete disk %s: %w", diskPath, err)
-	}
-
-	return nil
+	return safeRemoveFile(projectName)
 }
 
 // DiskExists checks if a project disk image exists.
@@ -190,17 +183,7 @@ func createVolume(volumeName string, sizeGB int, skipDiskCheck, preallocated boo
 
 // DeleteVolume removes a persistent volume backing file.
 func DeleteVolume(volumeName string) error {
-	volPath := filepath.Join(ImagesDir, volumeName+".ext4")
-
-	if _, err := os.Stat(volPath); os.IsNotExist(err) {
-		return nil // Already gone
-	}
-
-	if err := os.Remove(volPath); err != nil {
-		return fmt.Errorf("delete volume %s: %w", volPath, err)
-	}
-
-	return nil
+	return safeRemoveFile(volumeName)
 }
 
 // CreateUserDataDisk creates a small ext4 backing file for per-user writable storage
@@ -319,17 +302,7 @@ func CopyDiskContents(sourceDiskPath, targetDiskPath string) error {
 
 // DeleteUserDataDisk removes a per-user data disk.
 func DeleteUserDataDisk(diskName string) error {
-	diskPath := filepath.Join(ImagesDir, diskName+".ext4")
-
-	if _, err := os.Stat(diskPath); os.IsNotExist(err) {
-		return nil
-	}
-
-	if err := os.Remove(diskPath); err != nil {
-		return fmt.Errorf("delete user data disk %s: %w", diskPath, err)
-	}
-
-	return nil
+	return safeRemoveFile(diskName)
 }
 
 // CreateStateDisk creates a persistent state disk on the Storage Box share.
@@ -395,6 +368,41 @@ func StateDiskExists(project, service string) bool {
 func IsStorageBoxAvailable() bool {
 	_, err := os.Stat("/mnt/storagebox")
 	return err == nil
+}
+
+// IsSharedBaseImage returns true if the disk name matches a shared read-only base image.
+// Uses dynamic suffix matching: any name ending in "-base" (including the bare "base")
+// is a shared base image. This automatically protects future runtimes.
+func IsSharedBaseImage(diskName string) bool {
+	base := filepath.Base(diskName)
+	return base == "base" || strings.HasSuffix(base, "-base")
+}
+
+// safeRemoveFile removes a single .ext4 file inside ImagesDir. It refuses to:
+//   - Delete the ImagesDir directory itself
+//   - Delete any shared base image (*-base.ext4)
+func safeRemoveFile(diskName string) error {
+	if IsSharedBaseImage(diskName) {
+		return fmt.Errorf("refusing to delete shared base image %q", diskName)
+	}
+
+	diskPath := filepath.Join(ImagesDir, diskName+".ext4")
+
+	// Final safety net: ensure we're deleting a file inside ImagesDir, not the directory itself
+	if filepath.Clean(diskPath) == filepath.Clean(ImagesDir) {
+		return fmt.Errorf("CRITICAL BUG: attempting to delete ImagesDir itself (%s) — blocked", diskPath)
+	}
+
+	if _, err := os.Stat(diskPath); os.IsNotExist(err) {
+		return nil
+	}
+
+	log.Printf("[storage] removing: %s\n", diskPath)
+	if err := os.Remove(diskPath); err != nil {
+		return fmt.Errorf("delete %s: %w", diskPath, err)
+	}
+
+	return nil
 }
 
 // InjectSecrets mounts an ext4 disk image, writes environment variables as JSON to

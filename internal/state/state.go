@@ -65,7 +65,7 @@ type Service struct {
 	DiskPath     string   `json:"disk_path"`
 	UserDataDisk string   `json:"user_data_disk,omitempty"`
 	StateDisk    string   `json:"state_disk,omitempty"`
-	RootReadOnly bool     `json:"root_read_only,omitempty"`
+	RootReadOnly bool     `json:"root_read_only"`
 	Ephemeral    bool     `json:"ephemeral,omitempty"`
 	SocketPath   string   `json:"socket_path"`
 	PID          int      `json:"pid"`

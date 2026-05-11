@@ -31,6 +31,8 @@ type ServiceConfig struct {
 	Volumes            []string          `toml:"volumes"`
 	Env                map[string]string `toml:"env"`
 	PreallocatedVolumes bool             `toml:"preallocated_volumes"`
+	Storage            string            `toml:"storage"`   // "local" or "storagebox"; empty = default (SB when available)
+	Runtime            string            `toml:"runtime"`   // "python" or "deno"; overrides top-level runtime for this service
 }
 
 // Default returns a single default service configuration.
@@ -80,6 +82,16 @@ func Load(dir string) (UmutConfig, error) {
 		cfg.Runtime = tempCfg.Runtime
 	}
 
+	// Check whether any service explicitly sets its own runtime.
+	// If so, skip auto-detection for all services (build dir may contain mixed files).
+	hasExplicitServiceRuntime := false
+	for _, s := range tempCfg.Services {
+		if s.Runtime != "" {
+			hasExplicitServiceRuntime = true
+			break
+		}
+	}
+
 	if len(tempCfg.Services) > 0 {
 		// Overwrite default services with user-defined ones, but apply baseline defaults
 		cfg.Services = []ServiceConfig{}
@@ -105,6 +117,22 @@ func Load(dir string) (UmutConfig, error) {
 			if s.Mode != "server" && s.Mode != "function" {
 				return cfg, fmt.Errorf("service %q: invalid mode %q (must be 'server' or 'function')", s.Name, s.Mode)
 			}
+			if s.Storage != "" && s.Storage != "local" && s.Storage != "storagebox" {
+				return cfg, fmt.Errorf("service %q: invalid storage %q (must be 'local' or 'storagebox')", s.Name, s.Storage)
+			}
+		if s.Runtime == "" {
+			s.Runtime = cfg.Runtime
+		} else if s.Runtime != "python" && s.Runtime != "deno" {
+			return cfg, fmt.Errorf("service %q: invalid runtime %q (must be 'python' or 'deno')", s.Name, s.Runtime)
+		}
+		// Auto-detect runtime from build_dir files only when no runtime was
+		// explicitly set anywhere (top level or any service). This prevents
+		// auto-detection from picking the wrong file in mixed-language projects.
+		if tempCfg.Runtime == "" && s.Runtime == "python" && !hasExplicitServiceRuntime {
+			if detected := detectRuntime(filepath.Join(dir, s.BuildDir)); detected != "" {
+				s.Runtime = detected
+			}
+		}
 			cfg.Services = append(cfg.Services, s)
 		}
 	}
@@ -172,4 +200,29 @@ func (c *UmutConfig) MergeCLI(vcpus, memoryMB int, alwaysOn bool) {
 			c.Services[i].AlwaysOn = true
 		}
 	}
+}
+
+// detectRuntime inspects a build directory for Deno or Python files and returns
+// the detected runtime string ("deno" or "python"). Returns "" if no known files found.
+func detectRuntime(buildDir string) string {
+	denoExtensions := []string{".ts", ".js"}
+	for _, ext := range denoExtensions {
+		entries, err := os.ReadDir(buildDir)
+		if err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ext) {
+					return "deno"
+				}
+			}
+		}
+	}
+	entries, err := os.ReadDir(buildDir)
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".py") {
+				return "python"
+			}
+		}
+	}
+	return ""
 }

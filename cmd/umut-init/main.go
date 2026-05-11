@@ -149,6 +149,7 @@ func mountVolumes(vols string) {
 				continue
 			}
 			os.MkdirAll(path, 0755)
+
 			// Retry mount for up to 30 seconds — block devices may take time to appear
 			var lastErr error
 			for attempt := 0; attempt < 300; attempt++ {
@@ -300,6 +301,18 @@ func runEntrypoint(extraEnv []string) {
 		cmd = exec.Command("python3", "/workspace/main.py")
 	case fileExists("/main.py"):
 		cmd = exec.Command("python3", "/main.py")
+	case fileExists("/workspace/main.ts"):
+		cmd = exec.Command("deno", "run", "--allow-net", "--allow-env", "--allow-read", "/workspace/main.ts")
+	case fileExists("/main.ts"):
+		cmd = exec.Command("deno", "run", "--allow-net", "--allow-env", "--allow-read", "/main.ts")
+	case fileExists("/workspace/main.js"):
+		cmd = exec.Command("deno", "run", "--allow-net", "--allow-env", "--allow-read", "/workspace/main.js")
+	case fileExists("/main.js"):
+		cmd = exec.Command("deno", "run", "--allow-net", "--allow-env", "--allow-read", "/main.js")
+	case fileExists("/workspace/mod.ts"):
+		cmd = exec.Command("deno", "run", "--allow-net", "--allow-env", "--allow-read", "/workspace/mod.ts")
+	case fileExists("/mod.ts"):
+		cmd = exec.Command("deno", "run", "--allow-net", "--allow-env", "--allow-read", "/mod.ts")
 	case fileExists("/app/start.sh") || fileExists("/app/start"):
 		spath := "/app/start.sh"
 		if fileExists("/app/start") && !fileExists("/app/start.sh") {
