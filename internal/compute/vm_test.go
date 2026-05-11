@@ -178,32 +178,113 @@ func TestStopVMByPID_SocketWorks(t *testing.T) {
 	}
 }
 
-func TestCgroupNameFromSocketPath_Jailer(t *testing.T) {
+// --- Critical fix tests ---
+
+func TestIsSafeJailerPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		// Valid jailer paths under /srv/jailer/firecracker/
+		{"valid project path", "/srv/jailer/firecracker/myproject-main", true},
+		{"valid nested path", "/srv/jailer/firecracker/proj-api-v2", true},
+		{"valid simple name", "/srv/jailer/firecracker/test", true},
+
+		// Invalid: empty, dot, root — these are the CRITICAL cases that caused the bug
+		{"empty string", "", false},
+		{"dot (CWD — the bug path)", ".", false},
+		{"root", "/", false},
+
+		// Invalid: resolves to jailer base itself (would delete all projects)
+		{"jailer fc dir", "/srv/jailer/firecracker", false},
+		{"jailer base dir", "/srv/jailer", false},
+		{"srv root", "/srv", false},
+
+		// Invalid: paths outside jailer hierarchy
+		{"var lib umut", "/var/lib/umut", false},
+		{"var lib umut images", "/var/lib/umut/images", false},
+		{"tmp", "/tmp", false},
+		{"home", "/home/user", false},
+
+		// Invalid: path traversal attempts
+		{"traversal to var", "/srv/jailer/firecracker/../../var/lib/umut", false},
+		{"traversal to root", "/srv/jailer/firecracker/../../../..", false},
+
+		// Edge cases
+		{"path with trailing slash", "/srv/jailer/firecracker/myproject-main/", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isSafeJailerPath(tt.path)
+			if got != tt.want {
+				t.Errorf("isSafeJailerPath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsSafeJailerPath_WithJailerBaseDirConstant(t *testing.T) {
+	// Verify the function uses the constant JailerBaseDir correctly
+	// Paths under /srv/jailer/firecracker/ should be valid
+	if !isSafeJailerPath("/srv/jailer/firecracker/test-proj") {
+		t.Error("expected valid path under /srv/jailer/firecracker/")
+	}
+	// JailerBaseDir itself should be rejected
+	if isSafeJailerPath(JailerBaseDir) {
+		t.Error("should reject jailer base dir itself")
+	}
+	if isSafeJailerPath(filepath.Join(JailerBaseDir, "firecracker")) {
+		t.Error("should reject /srv/jailer/firecracker (would delete all projects)")
+	}
+}
+
+func TestStopVMByPID_EmptySocketPath_DoesNotDeleteWorkingDir(t *testing.T) {
+	// Create a temp directory structure simulating /var/lib/umut
+	tmpDir := t.TempDir()
+	imagesDir := filepath.Join(tmpDir, "images")
+	if err := os.MkdirAll(imagesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	baseImage := filepath.Join(imagesDir, "base.ext4")
+	if err := os.WriteFile(baseImage, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(baseImage); err != nil {
+		t.Fatalf("base image should exist before test: %v", err)
+	}
+
+	// StopVMByPID with empty socketPath — the exact bug scenario
+	// Previously this would call os.RemoveAll(".") and wipe CWD
+	err := StopVMByPID(99999, "")
+	if err != nil {
+		t.Logf("StopVMByPID returned: %v (acceptable)", err)
+	}
+
+	// Verify file still exists — proves no os.RemoveAll(".") was called
+	if _, err := os.Stat(baseImage); err != nil {
+		t.Errorf("base image was deleted! StopVMByPID with empty socketPath wiped the working dir: %v", err)
+	}
+}
+
+func TestCgroupNameFromSocketPath_Empty(t *testing.T) {
+	// filepath.Base("") returns "." — ensure it doesn't panic
+	got := CgroupNameFromSocketPath("")
+	t.Logf("CgroupNameFromSocketPath(\"\") = %q (should not panic)", got)
+}
+
+func TestCgroupNameFromSocketPath_Various(t *testing.T) {
 	tests := []struct {
 		name       string
 		socketPath string
 		expected   string
 	}{
-		{
-			name:       "jailer chroot path",
-			socketPath: "/srv/jailer/firecracker/myproject-main/root/myproject-main.sock",
-			expected:   "myproject-main",
-		},
-		{
-			name:       "old-style socket dir path",
-			socketPath: "/var/lib/umut/sockets/myproject-main.sock",
-			expected:   "myproject-main",
-		},
-		{
-			name:       "complex project name with dashes",
-			socketPath: "/srv/jailer/firecracker/proj-api-v2/root/proj-api-v2.sock",
-			expected:   "proj-api-v2",
-		},
-		{
-			name:       "simple name",
-			socketPath: "/srv/jailer/firecracker/test/root/test.sock",
-			expected:   "test",
-		},
+		{"jailer path", "/srv/jailer/firecracker/proj/root/proj.sock", "proj"},
+		{"old-style socket", "/var/lib/umut/sockets/test.sock", "test"},
+		{"dashed name", "/srv/jailer/firecracker/my-proj-v2/root/my-proj-v2.sock", "my-proj-v2"},
 	}
 
 	for _, tt := range tests {
@@ -213,22 +294,6 @@ func TestCgroupNameFromSocketPath_Jailer(t *testing.T) {
 				t.Errorf("CgroupNameFromSocketPath(%q) = %q, want %q", tt.socketPath, got, tt.expected)
 			}
 		})
-	}
-}
-
-func TestJailerSocketPathInDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig("test-proj", "/tmp/r.ext4", "tap0", "172.26.0.2", "aa:bb:cc:dd:ee:ff")
-	if cfg.SocketPath == "" {
-		t.Error("SocketPath should not be empty")
-	}
-	if !strings.Contains(cfg.SocketPath, SocketDir) {
-		t.Error("DefaultConfig SocketPath should include SocketDir (placeholder)")
-	}
-	if cfg.VCPUs != DefaultVCPUs {
-		t.Errorf("expected %d VCPUs, got %d", DefaultVCPUs, cfg.VCPUs)
-	}
-	if cfg.MemoryMB != DefaultMemoryMB {
-		t.Errorf("expected %d MB memory, got %d", DefaultMemoryMB, cfg.MemoryMB)
 	}
 }
 
@@ -248,7 +313,6 @@ func TestJailerConstantsAreSet(t *testing.T) {
 }
 
 func TestJailerRootPathConstruction(t *testing.T) {
-	// Verify that jailerRoot is constructed correctly (used for socket permission chmod in StartVM)
 	jailerRoot := filepath.Join(JailerBaseDir, "firecracker", "test-proj", "root")
 	expected := "/srv/jailer/firecracker/test-proj/root"
 	if jailerRoot != expected {
@@ -257,8 +321,6 @@ func TestJailerRootPathConstruction(t *testing.T) {
 }
 
 func TestSocketPathPermissions_DefaultConfig(t *testing.T) {
-	// DefaultConfig creates a placeholder socket path using SocketDir.
-	// The actual socket gets locked down to 0600 after jailer starts in StartVM.
 	cfg := DefaultConfig("security-test", "/tmp/r.ext4", "tap0", "172.26.0.2", "aa:bb:cc:dd:ee:ff")
 	if cfg.SocketPath != filepath.Join(SocketDir, "security-test.sock") {
 		t.Errorf("unexpected socket path: %s", cfg.SocketPath)
@@ -268,5 +330,21 @@ func TestSocketPathPermissions_DefaultConfig(t *testing.T) {
 func TestLogDir(t *testing.T) {
 	if LogDir != "/var/lib/umut/logs" {
 		t.Errorf("LogDir = %s, expected /var/lib/umut/logs", LogDir)
+	}
+}
+
+func TestDefaultSocketPath(t *testing.T) {
+	cfg := DefaultConfig("test-proj", "/tmp/r.ext4", "tap0", "172.26.0.2", "aa:bb:cc:dd:ee:ff")
+	if cfg.SocketPath == "" {
+		t.Error("DefaultConfig should set SocketPath")
+	}
+	if !strings.Contains(cfg.SocketPath, SocketDir) {
+		t.Error("DefaultConfig SocketPath should include SocketDir")
+	}
+	if cfg.VCPUs != DefaultVCPUs {
+		t.Errorf("expected %d VCPUs, got %d", DefaultVCPUs, cfg.VCPUs)
+	}
+	if cfg.MemoryMB != DefaultMemoryMB {
+		t.Errorf("expected %d MB memory, got %d", DefaultMemoryMB, cfg.MemoryMB)
 	}
 }

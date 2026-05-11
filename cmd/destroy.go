@@ -135,13 +135,14 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 						storage.DeleteDisk(legacyName)
 					}
 				}
-		} else if svc.DiskPath == "" {
-			// Legacy fallback when DiskPath is empty
-			legacyName := fmt.Sprintf("%s-%s", projectName, svc.Name)
-			if !storage.IsSharedBaseImage(legacyName) {
-				storage.DeleteDisk(legacyName)
+			} else if svc.DiskPath == "" {
+				// Legacy fallback when DiskPath is empty
+				legacyName := fmt.Sprintf("%s-%s", projectName, svc.Name)
+				if !storage.IsSharedBaseImage(legacyName) {
+					storage.DeleteDisk(legacyName)
+				}
 			}
-		}
+
 			fmt.Printf(" done\n")
 		}
 

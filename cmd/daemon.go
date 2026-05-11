@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -28,7 +29,46 @@ func init() {
 	rootCmd.AddCommand(daemonCmd)
 }
 
+// acquireDaemonLock creates a PID file to prevent duplicate daemon instances.
+// Returns a cleanup function that removes the PID file on exit.
+func acquireDaemonLock() (func(), error) {
+	dataDir := os.Getenv("UMUT_DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/var/lib/umut"
+	}
+	pidFile := filepath.Join(dataDir, "umut-daemon.pid")
+
+	// Check if another daemon is running
+	data, err := os.ReadFile(pidFile)
+	if err == nil {
+		var existingPid int
+		if _, err := fmt.Sscanf(string(data), "%d", &existingPid); err == nil {
+			if err := syscall.Kill(existingPid, 0); err == nil {
+				return nil, fmt.Errorf("umut daemon is already running (PID %d). If stale, remove %s", existingPid, pidFile)
+			}
+		}
+	}
+
+	f, err := os.OpenFile(pidFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("create PID file: %w", err)
+	}
+	fmt.Fprintf(f, "%d\n", os.Getpid())
+	f.Close()
+
+	cleanup := func() {
+		os.Remove(pidFile)
+	}
+	return cleanup, nil
+}
+
 func runDaemon(cmd *cobra.Command, args []string) error {
+	cleanup, err := acquireDaemonLock()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	store, err := state.NewStore()
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)

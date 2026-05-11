@@ -410,22 +410,33 @@ func StopVMByPID(pid int, socketPath string) error {
 
 // isSafeJailerPath validates that a path is a safe jailer directory to remove.
 // Prevents catastrophic data loss from empty/malformed socket paths.
+// Only allows paths like /srv/jailer/firecracker/<project-name>, not the
+// parent directories /srv/jailer/firecracker or /srv/jailer.
 func isSafeJailerPath(path string) bool {
 	if path == "" || path == "." || path == "/" {
 		return false
 	}
 	cleaned := filepath.Clean(path)
-	if cleaned == filepath.Clean(JailerBaseDir) {
+	fcDir := filepath.Clean(JailerBaseDir) + "/firecracker"
+	if cleaned == filepath.Clean(JailerBaseDir) || cleaned == fcDir {
 		return false
 	}
-	return strings.HasPrefix(cleaned, filepath.Clean(JailerBaseDir)+"/")
+	return strings.HasPrefix(cleaned, fcDir+"/")
 }
 
 // CgroupNameFromSocketPath derives the cgroup name from a VM's socket path.
 // With the jailer, the socket path is e.g. /srv/jailer/firecracker/<id>/root/<id>.sock,
 // so we extract the filename without extension to get the cgroup name.
+// Returns empty string for empty or invalid paths to avoid creating a cgroup named ".".
 func CgroupNameFromSocketPath(socketPath string) string {
-	return strings.TrimSuffix(filepath.Base(socketPath), ".sock")
+	if socketPath == "" {
+		return ""
+	}
+	name := strings.TrimSuffix(filepath.Base(socketPath), ".sock")
+	if name == "." || name == "" {
+		return ""
+	}
+	return name
 }
 
 func SendCtrlAltDel(socketPath string) error {
