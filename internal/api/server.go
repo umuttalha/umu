@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,13 +27,14 @@ import (
 const DefaultPort = 9070
 
 type Server struct {
-	store      *state.Store
-	port       int
-	http       *http.Server
-	tokens     *TokenStore
-	secrets    *secrets.Store
-	auth       *AuthMiddleware
-	audit      *audit.Logger
+	store     *state.Store
+	port      int
+	http      *http.Server
+	tokens    *TokenStore
+	secrets   *secrets.Store
+	auth      *AuthMiddleware
+	audit     *audit.Logger
+	version   string
 }
 
 type DeployRequest struct {
@@ -103,7 +105,7 @@ type TokenResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func Start(port int) error {
+func Start(port int, version string) error {
 	store, err := state.NewStore()
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
@@ -123,6 +125,10 @@ func Start(port int) error {
 
 	auth := NewAuthMiddleware(tokenStore, auditLogger)
 
+	if version == "" {
+		version = "dev"
+	}
+
 	s := &Server{
 		store:   store,
 		port:    port,
@@ -130,22 +136,42 @@ func Start(port int) error {
 		secrets: secretsStore,
 		auth:    auth,
 		audit:   auditLogger,
+		version: version,
 	}
 
 	mux := http.NewServeMux()
+
+	// Public endpoints (no auth required)
+	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/bootstrap", s.handleBootstrap)
-	mux.HandleFunc("/api/v1/projects", s.handleProjects)
-	mux.HandleFunc("/api/v1/projects/", s.handleProjectByPath)
-	mux.HandleFunc("/api/v1/tokens", s.handleTokens)
-	mux.HandleFunc("/api/v1/tokens/", s.handleTokenByPath)
+
+	// Authenticated endpoints
+	mux.HandleFunc("/api/v1/projects", s.authMiddleware(s.handleProjects))
+	mux.HandleFunc("/api/v1/projects/", s.authMiddleware(s.handleProjectByPath))
+	mux.HandleFunc("/api/v1/tokens", s.authMiddleware(s.handleTokens))
+	mux.HandleFunc("/api/v1/tokens/", s.authMiddleware(s.handleTokenByPath))
+	mux.HandleFunc("/api/v1/daemon/status", s.authMiddleware(s.handleDaemonStatus))
+	mux.HandleFunc("/api/v1/host/resources", s.authMiddleware(s.handleHostResources))
+	mux.HandleFunc("/api/v1/audit", s.authMiddleware(s.handleAuditLog))
+	mux.HandleFunc("/api/v1/version", s.authMiddleware(s.handleVersion))
+	mux.HandleFunc("/api/v1/validate", s.authMiddleware(s.handleValidate))
+	mux.HandleFunc("/api/v1/batch", s.authMiddleware(s.handleBatch))
+	mux.HandleFunc("/api/v1/upload", s.authMiddleware(s.handleSourceUpload))
+	mux.HandleFunc("/api/v1/uploads", s.authMiddleware(s.handleListUploads))
 
 	s.http = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
-		Handler: withLogging(withCORS(mux)),
+		Handler: withRequestID(withLogging(withCORS(mux))),
 	}
 
 	log.Printf("[api] Listening on 127.0.0.1:%d", port)
 	return s.http.ListenAndServe()
+}
+
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.auth.Authenticate(next)(w, r)
+	}
 }
 
 // POST /api/v1/bootstrap — create first admin token (only works when no tokens exist)
@@ -202,6 +228,15 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 // GET    /api/v1/projects/:name — status
 // DELETE /api/v1/projects/:name — destroy
+// POST   /api/v1/projects/:name/freeze — freeze project
+// POST   /api/v1/projects/:name/unfreeze — unfreeze project
+// POST   /api/v1/projects/:name/redeploy — redeploy project
+// POST   /api/v1/projects/:name/restart — restart project
+// POST   /api/v1/projects/:name/upload — upload source code
+// POST   /api/v1/projects/:name/inject — inject source into running VM
+// GET    /api/v1/projects/:name/volumes — list volumes
+// POST   /api/v1/projects/:name/volumes — attach volume
+// DELETE /api/v1/projects/:name/volumes — detach volume
 // GET    /api/v1/projects/:name/logs — stream logs
 // GET    /api/v1/projects/:name/metrics — CPU/mem
 // GET    /api/v1/projects/:name/usage — cumulative resource usage
@@ -229,6 +264,34 @@ func (s *Server) handleProjectByPath(w http.ResponseWriter, r *http.Request) {
 	case sub == "" && r.Method == http.MethodDelete:
 		s.auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			s.destroyProject(w, r, name)
+		}))(w, r)
+	case sub == "freeze" && r.Method == http.MethodPost:
+		s.auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.handleFreeze(w, r, name)
+		}))(w, r)
+	case sub == "unfreeze" && r.Method == http.MethodPost:
+		s.auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.handleUnfreeze(w, r, name)
+		}))(w, r)
+	case sub == "redeploy" && r.Method == http.MethodPost:
+		s.auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.handleRedeploy(w, r, name)
+		}))(w, r)
+	case sub == "restart" && r.Method == http.MethodPost:
+		s.auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.handleRestart(w, r, name)
+		}))(w, r)
+	case sub == "upload" && r.Method == http.MethodPost:
+		s.auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.handleUpload(w, r, name)
+		}))(w, r)
+	case sub == "inject" && r.Method == http.MethodPost:
+		s.auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.handleInjectSource(w, r, name)
+		}))(w, r)
+	case sub == "volumes":
+		s.auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.handleVolumes(w, r, name)
 		}))(w, r)
 	case sub == "logs" && r.Method == http.MethodGet:
 		s.auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -261,11 +324,67 @@ func (s *Server) handleProjectByPath(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	projects := s.store.List()
-	result := make([]ProjectInfo, 0, len(projects))
-	for _, p := range projects {
+
+	statusFilter := r.URL.Query().Get("status")
+	runtimeFilter := r.URL.Query().Get("runtime")
+
+	filtered := projects
+	if statusFilter != "" {
+		var matching []*state.Project
+		for _, p := range filtered {
+			if string(p.Status) == statusFilter {
+				matching = append(matching, p)
+			}
+		}
+		filtered = matching
+	}
+	if runtimeFilter != "" {
+		var matching []*state.Project
+		for _, p := range filtered {
+			if p.Runtime == runtimeFilter {
+				matching = append(matching, p)
+			}
+		}
+		filtered = matching
+	}
+
+	limit := 0
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := strconv.Atoi(o); err == nil && v > 0 {
+			offset = v
+		}
+	}
+
+	if offset > len(filtered) {
+		offset = len(filtered)
+	}
+	filtered = filtered[offset:]
+	if limit > 0 && limit < len(filtered) {
+		filtered = filtered[:limit]
+	}
+
+	result := make([]ProjectInfo, 0, len(filtered))
+	for _, p := range filtered {
 		result = append(result, toProjectInfo(p))
 	}
-	writeJSON(w, http.StatusOK, result)
+
+	totalCount := len(projects)
+	response := map[string]interface{}{
+		"projects": result,
+		"total":    totalCount,
+		"offset":   offset,
+	}
+	if limit > 0 {
+		response["limit"] = limit
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
@@ -470,18 +589,23 @@ func (s *Server) streamLogs(w http.ResponseWriter, r *http.Request, name string)
 		return
 	}
 
+	serviceName := r.URL.Query().Get("service")
+	if serviceName == "" {
+		serviceName = "main"
+	}
+
 	var svc *state.Service
 	for _, s := range project.Services {
-		if s.Name == "main" {
+		if s.Name == serviceName {
 			svc = s
 			break
 		}
 	}
-	if svc == nil && len(project.Services) > 0 {
+	if svc == nil && len(project.Services) > 0 && serviceName == "main" {
 		svc = project.Services[0]
 	}
 	if svc == nil {
-		writeError(w, http.StatusNotFound, "no services found")
+		writeError(w, http.StatusNotFound, fmt.Sprintf("service %q not found", serviceName))
 		return
 	}
 
@@ -490,6 +614,13 @@ func (s *Server) streamLogs(w http.ResponseWriter, r *http.Request, name string)
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
+	tail := int64(100 * 1024)
+	if t := r.URL.Query().Get("tail"); t != "" {
+		if v, err := strconv.ParseInt(t, 10, 64); err == nil && v > 0 {
+			tail = v * 1024
+		}
+	}
+
 	f, err := os.Open(logPath)
 	if err != nil {
 		io.WriteString(w, "no logs available")
@@ -497,7 +628,7 @@ func (s *Server) streamLogs(w http.ResponseWriter, r *http.Request, name string)
 	}
 	defer f.Close()
 
-	if _, err := f.Seek(-100*1024, io.SeekEnd); err != nil {
+	if _, err := f.Seek(-tail, io.SeekEnd); err != nil {
 		f.Seek(0, io.SeekStart)
 	}
 	io.Copy(w, f)
@@ -820,10 +951,14 @@ func withLogging(next http.Handler) http.Handler {
 }
 
 func withCORS(next http.Handler) http.Handler {
+	allowOrigin := os.Getenv("UMUT_CORS_ORIGINS")
+	if allowOrigin == "" {
+		allowOrigin = "*"
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Request-ID")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return

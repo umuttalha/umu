@@ -9,12 +9,12 @@ import (
 	"github.com/umuttalha/umut/internal/audit"
 )
 
-type contextKey string
-
 const (
 	ctxProjectName contextKey = "project"
 	ctxAuthMethod  contextKey = "auth_method"
 )
+
+type contextKey string
 
 type AuthMiddleware struct {
 	tokens *TokenStore
