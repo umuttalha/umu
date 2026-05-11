@@ -1,0 +1,33 @@
+# Binaries
+umut
+*.exe
+
+# Go
+vendor/
+*.test
+*.out
+cover.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+
+# Build
+dist/
+cmd-test
+scaletozero-test
+umut-init
+umut-init-linux-amd64
+umut-linux
+umut-linux-amd64

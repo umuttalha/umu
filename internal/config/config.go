@@ -1,0 +1,175 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/pelletier/go-toml/v2"
+)
+
+var serviceNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$`)
+
+// UmutConfig represents the merged configuration for a deployment.
+type UmutConfig struct {
+	Runtime  string          `toml:"runtime"` // "python" (default) or "deno"
+	Services []ServiceConfig `toml:"services"`
+}
+
+// ServiceConfig represents a single microVM within a project.
+type ServiceConfig struct {
+	Name               string            `toml:"name"`
+	BuildDir           string            `toml:"build_dir"`
+	Mode               string            `toml:"mode"` // "server" (default) or "function" — server stays running, function exits after execution
+	Expose             bool              `toml:"expose"`
+	VCPUs              int               `toml:"vcpus"`
+	MemoryMB           int               `toml:"memory_mb"`
+	AlwaysOn           bool              `toml:"always_on"`
+	Entrypoint         string            `toml:"entrypoint"`
+	Volumes            []string          `toml:"volumes"`
+	Env                map[string]string `toml:"env"`
+	PreallocatedVolumes bool             `toml:"preallocated_volumes"`
+}
+
+// Default returns a single default service configuration.
+func Default() UmutConfig {
+	return UmutConfig{
+		Runtime: "python",
+		Services: []ServiceConfig{
+			{
+				Name:     "main",
+				BuildDir: "./",
+				Expose:   true,
+				VCPUs:    1,
+				MemoryMB: 256,
+				Mode:     "server",
+				AlwaysOn: false,
+			},
+		},
+	}
+}
+
+// Load reads umut.toml from the given directory (if it exists) and merges it with defaults.
+func Load(dir string) (UmutConfig, error) {
+	cfg := Default()
+
+	tomlPath := filepath.Join(dir, "umut.toml")
+	data, err := os.ReadFile(tomlPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil // No toml, just return defaults
+		}
+		return cfg, fmt.Errorf("read config: %w", err)
+	}
+
+	// We parse into a temporary struct to check if services were explicitly provided
+	var tempCfg struct {
+		Runtime  string          `toml:"runtime"`
+		Services []ServiceConfig `toml:"services"`
+	}
+	if err := toml.Unmarshal(data, &tempCfg); err != nil {
+		return cfg, fmt.Errorf("parse config: %w", err)
+	}
+
+	if tempCfg.Runtime != "" {
+		if tempCfg.Runtime != "python" && tempCfg.Runtime != "deno" {
+			return cfg, fmt.Errorf("invalid runtime %q (must be 'python' or 'deno')", tempCfg.Runtime)
+		}
+		cfg.Runtime = tempCfg.Runtime
+	}
+
+	if len(tempCfg.Services) > 0 {
+		// Overwrite default services with user-defined ones, but apply baseline defaults
+		cfg.Services = []ServiceConfig{}
+		for _, s := range tempCfg.Services {
+			if err := validateServiceName(s.Name); err != nil {
+				return cfg, fmt.Errorf("service %q: %w", s.Name, err)
+			}
+			if err := validateVolumePaths(s.Volumes); err != nil {
+				return cfg, fmt.Errorf("service %q: %w", s.Name, err)
+			}
+			if s.VCPUs == 0 {
+				s.VCPUs = 1
+			}
+			if s.MemoryMB == 0 {
+				s.MemoryMB = 256
+			}
+			if s.BuildDir == "" {
+				s.BuildDir = "./"
+			}
+			if s.Mode == "" {
+				s.Mode = "server"
+			}
+			if s.Mode != "server" && s.Mode != "function" {
+				return cfg, fmt.Errorf("service %q: invalid mode %q (must be 'server' or 'function')", s.Name, s.Mode)
+			}
+			cfg.Services = append(cfg.Services, s)
+		}
+	}
+
+	return cfg, nil
+}
+
+func validateServiceName(name string) error {
+	if !serviceNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid service name %q: must be 2-32 chars, lowercase alphanumeric and hyphens", name)
+	}
+	return nil
+}
+
+var safeMountPrefixes = []string{
+	"/mnt/",
+	"/data/",
+	"/workspace/",
+	"/srv/",
+	"/opt/",
+	"/home/",
+	"/var/",
+	"/tmp/",
+}
+
+func validateVolumePaths(volumes []string) error {
+	for i, v := range volumes {
+		parts := strings.SplitN(v, ":", 2)
+		mountPath := parts[0]
+		if len(parts) == 2 {
+			// umut.toml format: "size:path" or "path" alone
+			mountPath = parts[1]
+		}
+		cleaned := filepath.Clean(mountPath)
+		if !filepath.IsAbs(cleaned) {
+			return fmt.Errorf("volume[%d] mount path %q must be absolute", i, mountPath)
+		}
+		if cleaned != mountPath {
+			return fmt.Errorf("volume[%d] mount path %q must be clean (resolved to %q)", i, mountPath, cleaned)
+		}
+		safe := false
+		for _, prefix := range safeMountPrefixes {
+			if strings.HasPrefix(cleaned, prefix) && cleaned != prefix[:len(prefix)-1] {
+				safe = true
+				break
+			}
+		}
+		if !safe {
+			return fmt.Errorf("volume[%d] mount path %q is not in an allowed directory (must start with one of: %s)", i, mountPath, strings.Join(safeMountPrefixes, ", "))
+		}
+	}
+	return nil
+}
+
+// MergeCLI overrides the struct fields with CLI flags for all services if provided.
+func (c *UmutConfig) MergeCLI(vcpus, memoryMB int, alwaysOn bool) {
+	for i := range c.Services {
+		if vcpus > 0 {
+			c.Services[i].VCPUs = vcpus
+		}
+		if memoryMB > 0 {
+			c.Services[i].MemoryMB = memoryMB
+		}
+		if alwaysOn {
+			c.Services[i].AlwaysOn = true
+		}
+	}
+}
