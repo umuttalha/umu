@@ -340,7 +340,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 				var stateDiskErr error
 				stateDiskDone := make(chan struct{})
 
-		if useSharedRoot && sCfg.Storage != "local" {
+				if useSharedRoot && sCfg.Storage != "local" {
 					stateDiskStarted = true
 					go func() {
 						defer close(stateDiskDone)
@@ -828,17 +828,17 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 				}
 			}
 
-		// Clean up old disks. Skip shared root images (only delete per-VM disks).
-		// Never delete state disks on Storage Box — they persist across updates.
-		if oldSvc.UserDataDisk != "" && oldSvc.StateDisk == "" {
-			storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(oldSvc.UserDataDisk), ".ext4"))
-		}
-		if oldSvc.DiskPath != "" && !oldSvc.RootReadOnly {
-			diskName := strings.TrimSuffix(filepath.Base(oldSvc.DiskPath), ".ext4")
-			if !storage.IsSharedBaseImage(diskName) {
-				storage.DeleteDisk(diskName)
+			// Clean up old disks. Skip shared root images (only delete per-VM disks).
+			// Never delete state disks on Storage Box — they persist across updates.
+			if oldSvc.UserDataDisk != "" && oldSvc.StateDisk == "" {
+				storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(oldSvc.UserDataDisk), ".ext4"))
 			}
-		}
+			if oldSvc.DiskPath != "" && !oldSvc.RootReadOnly {
+				diskName := strings.TrimSuffix(filepath.Base(oldSvc.DiskPath), ".ext4")
+				if !storage.IsSharedBaseImage(diskName) {
+					storage.DeleteDisk(diskName)
+				}
+			}
 
 			fmt.Printf(" done\n")
 		}
@@ -909,16 +909,16 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 				}
 				routing.RemoveRoute(routeHostname)
 			}
-		if svc.UserDataDisk != "" {
-			storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4"))
-		}
-		if svc.DiskPath != "" && !svc.RootReadOnly {
-			diskName := strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4")
-			if !storage.IsSharedBaseImage(diskName) {
-				storage.DeleteDisk(diskName)
+			if svc.UserDataDisk != "" {
+				storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4"))
 			}
-		}
-		fmt.Printf("  done\n")
+			if svc.DiskPath != "" && !svc.RootReadOnly {
+				diskName := strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4")
+				if !storage.IsSharedBaseImage(diskName) {
+					storage.DeleteDisk(diskName)
+				}
+			}
+			fmt.Printf("  done\n")
 		}
 	}
 	existing.Services = keptServices

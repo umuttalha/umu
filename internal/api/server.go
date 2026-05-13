@@ -27,14 +27,14 @@ import (
 const DefaultPort = 9070
 
 type Server struct {
-	store     *state.Store
-	port      int
-	http      *http.Server
-	tokens    *TokenStore
-	secrets   *secrets.Store
-	auth      *AuthMiddleware
-	audit     *audit.Logger
-	version   string
+	store   *state.Store
+	port    int
+	http    *http.Server
+	tokens  *TokenStore
+	secrets *secrets.Store
+	auth    *AuthMiddleware
+	audit   *audit.Logger
+	version string
 }
 
 type DeployRequest struct {
@@ -412,11 +412,11 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 	projectIndex := len(s.store.List())
 
 	project := &state.Project{
-		Name:       req.Name,
-		Status:     state.StatusCreating,
-		Runtime:    cfg.Runtime,
-		Services:   []*state.Service{},
-		CreatedAt:  time.Now(),
+		Name:      req.Name,
+		Status:    state.StatusCreating,
+		Runtime:   cfg.Runtime,
+		Services:  []*state.Service{},
+		CreatedAt: time.Now(),
 	}
 
 	for i, sCfg := range cfg.Services {

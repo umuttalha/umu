@@ -18,8 +18,8 @@ import (
 )
 
 type RedeployRequest struct {
-	Runtime  string                 `json:"runtime"`
-	Services []configServiceConfig  `json:"services"`
+	Runtime  string                `json:"runtime"`
+	Services []configServiceConfig `json:"services"`
 }
 
 type configServiceConfig struct {
@@ -58,13 +58,13 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 		}
 		for _, svc := range project.Services {
 			req.Services = append(req.Services, configServiceConfig{
-				Name:      svc.Name,
-				Runtime:   runtime,
-				VCPUs:     svc.VCPUs,
-				MemoryMB:  svc.MemoryMB,
-				AlwaysOn:  svc.AlwaysOn,
-				Expose:    svc.Expose,
-				Port:      svc.ServicePort,
+				Name:     svc.Name,
+				Runtime:  runtime,
+				VCPUs:    svc.VCPUs,
+				MemoryMB: svc.MemoryMB,
+				AlwaysOn: svc.AlwaysOn,
+				Expose:   svc.Expose,
+				Port:     svc.ServicePort,
 			})
 		}
 	}

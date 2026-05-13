@@ -26,12 +26,12 @@ type DaemonStatusResponse struct {
 }
 
 type HostResourcesResponse struct {
-	Memory   ResourceDetail   `json:"memory"`
-	Disk     ResourceDetail   `json:"disk"`
-	Projects int              `json:"projects"`
-	VMs      int              `json:"vms"`
-	Checks   []monitor.Check  `json:"checks"`
-	Warnings []string         `json:"warnings,omitempty"`
+	Memory   ResourceDetail  `json:"memory"`
+	Disk     ResourceDetail  `json:"disk"`
+	Projects int             `json:"projects"`
+	VMs      int             `json:"vms"`
+	Checks   []monitor.Check `json:"checks"`
+	Warnings []string        `json:"warnings,omitempty"`
 }
 
 type ResourceDetail struct {

@@ -20,19 +20,19 @@ type UmutConfig struct {
 
 // ServiceConfig represents a single microVM within a project.
 type ServiceConfig struct {
-	Name               string            `toml:"name"`
-	BuildDir           string            `toml:"build_dir"`
-	Mode               string            `toml:"mode"` // "server" (default) or "function" — server stays running, function exits after execution
-	Expose             bool              `toml:"expose"`
-	VCPUs              int               `toml:"vcpus"`
-	MemoryMB           int               `toml:"memory_mb"`
-	AlwaysOn           bool              `toml:"always_on"`
-	Entrypoint         string            `toml:"entrypoint"`
-	Volumes            []string          `toml:"volumes"`
-	Env                map[string]string `toml:"env"`
-	PreallocatedVolumes bool             `toml:"preallocated_volumes"`
-	Storage            string            `toml:"storage"`   // "local" or "storagebox"; empty = default (SB when available)
-	Runtime            string            `toml:"runtime"`   // "python" or "deno"; overrides top-level runtime for this service
+	Name                string            `toml:"name"`
+	BuildDir            string            `toml:"build_dir"`
+	Mode                string            `toml:"mode"` // "server" (default) or "function" — server stays running, function exits after execution
+	Expose              bool              `toml:"expose"`
+	VCPUs               int               `toml:"vcpus"`
+	MemoryMB            int               `toml:"memory_mb"`
+	AlwaysOn            bool              `toml:"always_on"`
+	Entrypoint          string            `toml:"entrypoint"`
+	Volumes             []string          `toml:"volumes"`
+	Env                 map[string]string `toml:"env"`
+	PreallocatedVolumes bool              `toml:"preallocated_volumes"`
+	Storage             string            `toml:"storage"` // "local" or "storagebox"; empty = default (SB when available)
+	Runtime             string            `toml:"runtime"` // "python" or "deno"; overrides top-level runtime for this service
 }
 
 // Default returns a single default service configuration.
@@ -120,19 +120,19 @@ func Load(dir string) (UmutConfig, error) {
 			if s.Storage != "" && s.Storage != "local" && s.Storage != "storagebox" {
 				return cfg, fmt.Errorf("service %q: invalid storage %q (must be 'local' or 'storagebox')", s.Name, s.Storage)
 			}
-		if s.Runtime == "" {
-			s.Runtime = cfg.Runtime
-		} else if s.Runtime != "python" && s.Runtime != "deno" {
-			return cfg, fmt.Errorf("service %q: invalid runtime %q (must be 'python' or 'deno')", s.Name, s.Runtime)
-		}
-		// Auto-detect runtime from build_dir files only when no runtime was
-		// explicitly set anywhere (top level or any service). This prevents
-		// auto-detection from picking the wrong file in mixed-language projects.
-		if tempCfg.Runtime == "" && s.Runtime == "python" && !hasExplicitServiceRuntime {
-			if detected := detectRuntime(filepath.Join(dir, s.BuildDir)); detected != "" {
-				s.Runtime = detected
+			if s.Runtime == "" {
+				s.Runtime = cfg.Runtime
+			} else if s.Runtime != "python" && s.Runtime != "deno" {
+				return cfg, fmt.Errorf("service %q: invalid runtime %q (must be 'python' or 'deno')", s.Name, s.Runtime)
 			}
-		}
+			// Auto-detect runtime from build_dir files only when no runtime was
+			// explicitly set anywhere (top level or any service). This prevents
+			// auto-detection from picking the wrong file in mixed-language projects.
+			if tempCfg.Runtime == "" && s.Runtime == "python" && !hasExplicitServiceRuntime {
+				if detected := detectRuntime(filepath.Join(dir, s.BuildDir)); detected != "" {
+					s.Runtime = detected
+				}
+			}
 			cfg.Services = append(cfg.Services, s)
 		}
 	}
