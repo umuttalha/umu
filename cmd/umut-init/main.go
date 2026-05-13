@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -31,16 +32,16 @@ func main() {
 
 	ip, gw, hosts, vols, _ := parseCmdline()
 
-	envVars := parseEnvFromDisk()
-	if len(envVars) == 0 {
-		envVars = parseEnvFromCmdline()
-	}
-
 	if ip != "" && gw != "" {
 		setupNetworking(ip, gw, hosts)
 	}
 
 	mountVolumes(vols)
+
+	envVars := parseEnvFromDisk()
+	if len(envVars) == 0 {
+		envVars = parseEnvFromCmdline()
+	}
 
 	runEntrypoint(envVars)
 }
@@ -73,6 +74,25 @@ func mountFilesystems() {
 	syscall.Mount("tmpfs", "/tmp", "tmpfs", 0, "")
 	syscall.Mount("tmpfs", "/run", "tmpfs", 0, "")
 	syscall.Mount("tmpfs", "/workspace", "tmpfs", 0, "size=16m")
+
+	nsswitchTmp := "/dev/shm/nsswitch.conf"
+	os.WriteFile(nsswitchTmp, []byte("hosts: files dns\n"), 0644)
+	syscall.Mount(nsswitchTmp, "/etc/nsswitch.conf", "", syscall.MS_BIND, "")
+
+	hostsTmp := "/dev/shm/hosts"
+	os.WriteFile(hostsTmp, []byte("127.0.0.1 localhost\n"), 0644)
+	syscall.Mount(hostsTmp, "/etc/hosts", "", syscall.MS_BIND, "")
+
+	lo, _ := netlink.LinkByName("lo")
+	if lo != nil {
+		netlink.LinkSetUp(lo)
+		os.WriteFile("/proc/sys/net/ipv6/conf/lo/disable_ipv6", []byte("0"), 0644)
+		os.WriteFile("/proc/sys/net/ipv6/conf/all/disable_ipv6", []byte("0"), 0644)
+		loAddr, _ := netlink.ParseAddr("::1/128")
+		if loAddr != nil {
+			netlink.AddrAdd(lo, loAddr)
+		}
+	}
 }
 
 func parseCmdline() (ip, gw, hosts, vols, mode string) {
@@ -202,7 +222,19 @@ func setupNetworking(ip, gw, hosts string) {
 		log.Println("[umut-init] error adding default route:", err)
 	}
 
-	os.WriteFile("/etc/resolv.conf", []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0644)
+	resolvContent := "nameserver 8.8.8.8\n"
+	resolvTmp := "/dev/shm/resolv.conf"
+	if err := os.WriteFile(resolvTmp, []byte(resolvContent), 0644); err != nil {
+		log.Println("[umut-init] error writing resolv.conf to shm:", err)
+	} else if err := syscall.Mount(resolvTmp, "/etc/resolv.conf", "", syscall.MS_BIND, ""); err != nil {
+		log.Println("[umut-init] error bind-mounting resolv.conf:", err)
+	} else {
+		log.Println("[umut-init] resolv.conf bind-mounted to", gw)
+	}
+
+	if data, err := os.ReadFile("/etc/resolv.conf"); err == nil {
+		log.Printf("[umut-init] resolv.conf content: %s", strings.TrimSpace(string(data)))
+	}
 
 	if hosts != "" {
 		f, err := os.OpenFile("/etc/hosts", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
@@ -291,10 +323,203 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+func testConnectivity() {
+	ips, err := resolveFromHosts()
+	if err != nil {
+		log.Printf("[umut-init] connectivity: failed to read hosts: %v", err)
+		return
+	}
+	if len(ips) == 0 {
+		log.Printf("[umut-init] connectivity: no external IPs in /etc/hosts")
+		return
+	}
+	for _, ip := range ips {
+		addr := fmt.Sprintf("%s:443", ip)
+		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+		if err != nil {
+			log.Printf("[umut-init] connectivity: FAIL TCP %s (%v)", addr, err)
+		} else {
+			conn.Close()
+			log.Printf("[umut-init] connectivity: OK TCP %s", addr)
+		}
+	}
+	dnsAddr := "8.8.8.8:53"
+	conn, err := net.DialTimeout("udp", dnsAddr, 3*time.Second)
+	if err != nil {
+		log.Printf("[umut-init] connectivity: FAIL UDP DNS %s (%v)", dnsAddr, err)
+	} else {
+		conn.Close()
+		log.Printf("[umut-init] connectivity: OK UDP DNS %s", dnsAddr)
+	}
+}
+
+func resolveFromHosts() ([]string, error) {
+	f, err := os.Open("/etc/hosts")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var ips []string
+	seen := map[string]bool{}
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			ip := fields[0]
+			if !strings.Contains(ip, ":") && ip != "127.0.0.1" && !seen[ip] {
+				ips = append(ips, ip)
+				seen[ip] = true
+			}
+		}
+	}
+	return ips, nil
+}
+
+func findR2Target() (r2IP, r2Host string) {
+	f, err := os.Open("/etc/hosts")
+	if err != nil {
+		return "", ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			for _, h := range fields[1:] {
+				if strings.Contains(h, "r2.cloudflarestorage.com") {
+					return fields[0], h
+				}
+			}
+		}
+	}
+	return "", ""
+}
+
+func startS3Proxy(r2IP, r2Host string) {
+	if r2IP == "" {
+		log.Println("[umut-init] proxy: no R2 endpoint, skipping")
+		return
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:443")
+	if err != nil {
+		log.Printf("[umut-init] proxy: listen 127.0.0.1:443: %v", err)
+		return
+	}
+
+	go func() {
+		log.Printf("[umut-init] proxy: 127.0.0.1:443 → %s:443 (SNI will be %s)", r2IP, r2Host)
+		for {
+			clientConn, err := listener.Accept()
+			if err != nil {
+				log.Printf("[umut-init] proxy: accept error: %v", err)
+				return
+			}
+			go func() {
+				defer clientConn.Close()
+				backendConn, err := net.DialTimeout("tcp", r2IP+":443", 10*time.Second)
+				if err != nil {
+					log.Printf("[umut-init] proxy: dial %s:443: %v", r2IP, err)
+					return
+				}
+				defer backendConn.Close()
+				go transfer(clientConn, backendConn)
+				transfer(backendConn, clientConn)
+			}()
+		}
+	}()
+	time.Sleep(100 * time.Millisecond)
+}
+
+func transfer(dst net.Conn, src net.Conn) {
+	defer dst.Close()
+	buf := make([]byte, 32768)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func rewriteHosts(r2Host string) {
+	data, err := os.ReadFile("/etc/hosts")
+	if err != nil {
+		log.Printf("[umut-init] rewriteHosts: %v", err)
+		return
+	}
+	lines := strings.Split(string(data), "\n")
+	var out []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			out = append(out, line)
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 {
+			out = append(out, line)
+			continue
+		}
+		hasR2 := false
+		for _, h := range fields[1:] {
+			if strings.Contains(h, "r2.cloudflarestorage.com") {
+				hasR2 = true
+				break
+			}
+		}
+		if hasR2 {
+			out = append(out, fmt.Sprintf("127.0.0.1\t%s", r2Host))
+		} else {
+			out = append(out, line)
+		}
+	}
+	if err := os.WriteFile("/etc/hosts", []byte(strings.Join(out, "\n")+"\n"), 0644); err != nil {
+		log.Printf("[umut-init] rewriteHosts write: %v", err)
+		return
+	}
+	log.Printf("[umut-init] rewriteHosts: %s → 127.0.0.1", r2Host)
+}
+
 func runEntrypoint(extraEnv []string) {
 	cmd := exec.Command("sh", "-c", "sleep infinity")
 
 	switch {
+	case fileExists("/workspace/quickwit.yaml"):
+		if fileExists("/usr/local/bin/dns-local") {
+			dnsCmd := exec.Command("/usr/local/bin/dns-local")
+			dnsCmd.Stdout = os.Stdout
+			dnsCmd.Stderr = os.Stderr
+			if err := dnsCmd.Start(); err != nil {
+				log.Printf("[umut-init] warning: failed to start dns-local: %v", err)
+			} else {
+				log.Println("[umut-init] dns-local started")
+				time.Sleep(300 * time.Millisecond)
+			}
+		}
+		cmd = exec.Command("/usr/local/bin/quickwit", "run",
+			"--config", "/workspace/quickwit.yaml",
+		)
+		cmd.Env = append(os.Environ(), extraEnv...)
+		cmd.Env = append(cmd.Env,
+			"HOME=/tmp",
+			"QW_LISTEN_ADDRESS=0.0.0.0:7280",
+			"SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
+		)
+		os.MkdirAll("/workspace/quickwit-data", 0755)
 	case fileExists("/workspace/start.sh"):
 		cmd = exec.Command("sh", "/workspace/start.sh")
 	case fileExists("/workspace/main.py"):

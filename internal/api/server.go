@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/umuttalha/umut/internal/network"
 	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
+	"github.com/umuttalha/umut/internal/runtime"
 	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/secrets"
 	"github.com/umuttalha/umut/internal/state"
@@ -409,6 +411,8 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 
 	cfg := buildConfig(req)
 
+	servicePort := config.RuntimeDefaultPort(cfg.Runtime)
+
 	projectIndex := len(s.store.List())
 
 	project := &state.Project{
@@ -471,7 +475,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 			RootReadOnly: rootReadOnly,
 			GuestIP:      guestIP,
 			MACAddress:   mac,
-			ServicePort:  8080,
+			ServicePort:  servicePort,
 		}
 
 		var extraDrives []string
@@ -494,6 +498,40 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 			storage.InjectSecrets(targetDisk, mergedEnv)
 		}
 
+		if sCfg.Runtime == "quickwit" {
+			s3Cfg := config.GlobalS3Config()
+			qwConfig, qwErr := runtime.QuickwitConfig(s3Cfg.Endpoint, s3Cfg.Region, s3Cfg.Bucket, req.Name)
+			if qwErr != nil {
+				project.Status = state.StatusError
+				s.store.Save(project)
+				writeError(w, http.StatusInternalServerError, "quickwit config: "+qwErr.Error())
+				return
+			}
+			targetDisk := diskPath
+			if userDataDisk != "" {
+				targetDisk = userDataDisk
+			}
+			if err := injectConfigFileAPI(targetDisk, "quickwit.yaml", qwConfig); err != nil {
+				project.Status = state.StatusError
+				s.store.Save(project)
+				writeError(w, http.StatusInternalServerError, "inject quickwit config: "+err.Error())
+				return
+			}
+			if s3Cfg.AccessKeyID != "" && s3Cfg.SecretAccessKey != "" {
+				if mergedEnv == nil {
+					mergedEnv = make(map[string]string)
+				}
+				mergedEnv["AWS_ACCESS_KEY_ID"] = s3Cfg.AccessKeyID
+				mergedEnv["AWS_SECRET_ACCESS_KEY"] = s3Cfg.SecretAccessKey
+				if s3Cfg.Token != "" {
+					mergedEnv["AWS_SESSION_TOKEN"] = s3Cfg.Token
+				}
+				if userDataDisk != "" {
+					storage.InjectSecrets(userDataDisk, mergedEnv)
+				}
+			}
+		}
+
 		if mdJSON, mdErr := compute.BuildMetadataJSON(vmCfg, mergedEnv); mdErr == nil {
 			vmCfg.MetadataJSON = mdJSON
 		}
@@ -512,7 +550,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		if sCfg.Expose {
 			routeHostname := proj.RouteHostname(req.Name, sCfg.Name)
 			if sCfg.AlwaysOn {
-				routing.AddRoute(routeHostname, guestIP, 8080)
+				routing.AddRoute(routeHostname, guestIP, servicePort)
 			} else {
 				routing.AddRoute(routeHostname, "127.0.0.1", scaletozero.DefaultProxyPort)
 			}
@@ -856,11 +894,15 @@ func buildConfig(req DeployRequest) config.UmutConfig {
 		return cfg
 	}
 	for i := range req.Services {
+		sr := req.Services[i].Runtime
+		if sr == "" {
+			sr = cfg.Runtime
+		}
 		if req.Services[i].VCPUs == 0 {
-			req.Services[i].VCPUs = 1
+			req.Services[i].VCPUs = config.RuntimeDefaultVCPUs(sr)
 		}
 		if req.Services[i].MemoryMB == 0 {
-			req.Services[i].MemoryMB = 256
+			req.Services[i].MemoryMB = config.RuntimeDefaultMemory(sr)
 		}
 		if req.Services[i].BuildDir == "" {
 			req.Services[i].BuildDir = "./"
@@ -931,4 +973,20 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func injectConfigFileAPI(diskPath, filename, content string) error {
+	mnt, err := os.MkdirTemp("", "umut-config-")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(mnt)
+
+	cmd := exec.Command("mount", diskPath, mnt)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mount disk %s: %s: %w", diskPath, string(out), err)
+	}
+	defer exec.Command("umount", mnt).Run()
+
+	return os.WriteFile(filepath.Join(mnt, filename), []byte(content), 0644)
 }

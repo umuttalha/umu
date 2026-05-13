@@ -441,6 +441,139 @@ if [ ! -f "$UMUT_DIR/images/deno-base.ext4" ]; then
     info "deno-base.ext4 created (512MB, Deno runtime pre-installed)"
 fi
 
+# ── Build dns-local binary ───────────────────
+
+build_dns_local() {
+    if [ -f /usr/local/bin/dns-local ]; then
+        info "dns-local already installed"
+        return
+    fi
+    info "Building dns-local..."
+    local build_dir
+    build_dir=$(mktemp -d)
+    local repo="https://github.com/umuttalha/umut.git"
+
+    if ! command -v go &> /dev/null; then
+        local go_ver="1.24.5"
+        info "Installing Go ${go_ver}..."
+        curl -fsSL "https://go.dev/dl/go${go_ver}.linux-amd64.tar.gz" | tar -C /usr/local -xzf -
+        export PATH=$PATH:/usr/local/go/bin
+        echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
+        info "Go ${go_ver} installed"
+    fi
+
+    git clone --depth 1 "$repo" "$build_dir/umut" 2>/dev/null || {
+        fail "Could not clone $repo"
+    }
+    (cd "$build_dir/umut" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o /usr/local/bin/dns-local ./cmd/dns-local/)
+    chmod +x /usr/local/bin/dns-local
+    rm -rf "$build_dir"
+    info "dns-local built and installed"
+}
+
+# ── Download Quickwit binary ───────────────────
+
+QUICKWIT_VERSION="0.8.2"
+
+download_quickwit() {
+    if [ -f /usr/local/bin/quickwit ]; then
+        info "Quickwit already installed"
+        return
+    fi
+    info "Downloading Quickwit ${QUICKWIT_VERSION}..."
+    local url="https://github.com/quickwit-oss/quickwit/releases/download/v${QUICKWIT_VERSION}/quickwit-${QUICKWIT_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+    local tmp="$(mktemp -d)"
+    local archive="$tmp/quickwit.tar.gz"
+    curl -fsSL "$url" -o "$archive"
+
+    # Verify checksum if SHA256SUMS file exists in release, or use known hash
+    local checksum_url="https://github.com/quickwit-oss/quickwit/releases/download/v${QUICKWIT_VERSION}/quickwit-${QUICKWIT_VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256"
+    local checksum_file="$tmp/checksum.sha256"
+    if curl -fsSL "$checksum_url" -o "$checksum_file" 2>/dev/null; then
+        (cd "$tmp" && sha256sum -c "$checksum_file" --status 2>/dev/null) || \
+            fail "Quickwit archive checksum mismatch"
+        info "Quickwit checksum verified"
+    elif [ -n "${QUICKWIT_SHA256:-}" ]; then
+        local actual
+        actual=$(sha256sum "$archive" | awk '{print $1}')
+        if [ "$actual" != "$QUICKWIT_SHA256" ]; then
+            rm -rf "$tmp"
+            fail "Quickwit SHA256 mismatch: expected $QUICKWIT_SHA256, got $actual"
+        fi
+        info "Quickwit SHA256 verified"
+    else
+        warn "Could not verify Quickwit checksum (set QUICKWIT_SHA256 env var for verification)"
+    fi
+
+    tar xzf "$archive" -C "$tmp/"
+    mv "$tmp/quickwit-${QUICKWIT_VERSION}/quickwit" /usr/local/bin/quickwit
+    chmod +x /usr/local/bin/quickwit
+    rm -rf "$tmp"
+    info "Quickwit ${QUICKWIT_VERSION} installed"
+}
+
+# ── Build quickwit-base.ext4 ───────────────────
+
+build_quickwit_base() {
+    local base="$UMUT_DIR/images/quickwit-base.ext4"
+    if [ -f "$base" ]; then
+        info "quickwit-base.ext4 already present"
+        return
+    fi
+
+    info "Creating quickwit-base.ext4 (shared read-only root, 500MB)..."
+    truncate -s 500M "$base"
+    mkfs.ext4 -F "$base" > /dev/null 2>&1
+
+    local mnt="$(mktemp -d)"
+    mount "$base" "$mnt"
+
+    mkdir -p "$mnt"/{bin,dev,etc,proc,sys,tmp,usr/local/bin,sbin,lib,lib64,workspace}
+    mkdir -p "$mnt/lib/x86_64-linux-gnu"
+    mkdir -p "$mnt/etc/ssl/certs"
+
+    cp /usr/local/bin/umut-init "$mnt/sbin/init"
+    chmod +x "$mnt/sbin/init"
+
+    cp /usr/local/bin/quickwit "$mnt/usr/local/bin/quickwit"
+
+    cp /usr/local/bin/dns-local "$mnt/usr/local/bin/dns-local"
+    chmod +x "$mnt/usr/local/bin/dns-local"
+
+    # Copy shared libraries required by Quickwit
+    if cp /bin/sh "$mnt/bin/sh" 2>/dev/null; then
+        true
+    fi
+
+    # Copy all shared libraries resolved by ldd
+    ldd /usr/local/bin/quickwit 2>/dev/null | while read -r line; do
+        libpath=$(echo "$line" | grep -oP '/\S+' | head -1)
+        if [ -n "$libpath" ] && [ -f "$libpath" ]; then
+            if [ "$(basename "$libpath")" = "ld-linux-x86-64.so.2" ]; then
+                cp "$libpath" "$mnt/lib64/" 2>/dev/null
+            else
+                cp "$libpath" "$mnt/lib/x86_64-linux-gnu/" 2>/dev/null
+            fi
+        fi
+    done
+
+    # Copy CA certificates for HTTPS connections (needed for S3/R2)
+    if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+        cp /etc/ssl/certs/ca-certificates.crt "$mnt/etc/ssl/certs/"
+    fi
+
+    echo "nameserver 8.8.8.8" > "$mnt/etc/resolv.conf"
+
+    umount "$mnt"
+    rmdir "$mnt"
+
+    chown 1000:1000 "$base" 2>/dev/null || true
+    chmod 0640 "$base"
+
+    sha256sum "$base" > "$UMUT_DIR/checksums/quickwit-base.ext4.sha256"
+    info "quickwit-base.ext4 created (500MB)"
+}
+
 # ── Install CNI plugins ───────────────────────
 
 CNI_PLUGIN_VERSION="v1.6.2"
@@ -535,6 +668,14 @@ info "Configuring system networking..."
 sysctl -w net.ipv4.ip_forward=1 > /dev/null 2>&1
 echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-umut.conf
 
+# Enable route_localnet so DNAT to 127.0.0.53 works for VM DNS
+sysctl -w net.ipv4.conf.br-umut.route_localnet=1 > /dev/null 2>&1
+sysctl -w net.ipv4.conf.all.route_localnet=1 > /dev/null 2>&1
+cat >> /etc/sysctl.d/99-umut.conf << 'SYSCTL'
+net.ipv4.conf.br-umut.route_localnet=1
+net.ipv4.conf.all.route_localnet=1
+SYSCTL
+
 # Setup base NAT rules (detect primary interface)
 PRIMARY_IF=$(ip route get 1.1.1.1 | grep -oP 'dev \K\S+' | head -1)
 if [[ -n "$PRIMARY_IF" ]]; then
@@ -546,6 +687,13 @@ if [[ -n "$PRIMARY_IF" ]]; then
 else
     warn "Could not detect primary network interface — NAT not configured"
 fi
+
+# DNS forwarding: redirect VM DNS queries via bridge to systemd-resolved
+iptables -t nat -C PREROUTING -i br-umut -p udp --dport 53 -j DNAT --to-destination 127.0.0.53:53 2>/dev/null || \
+    iptables -t nat -A PREROUTING -i br-umut -p udp --dport 53 -j DNAT --to-destination 127.0.0.53:53
+iptables -t nat -C PREROUTING -i br-umut -p tcp --dport 53 -j DNAT --to-destination 127.0.0.53:53 2>/dev/null || \
+    iptables -t nat -A PREROUTING -i br-umut -p tcp --dport 53 -j DNAT --to-destination 127.0.0.53:53
+info "DNS forwarding from VMs to systemd-resolved configured"
 
 # ── Create umut system user for jailer ─────────
 
@@ -737,6 +885,12 @@ if [ -n "$PS1" ] && command -v umut >/dev/null 2>&1; then
 fi
 EOF
 chmod +x /etc/profile.d/99-umut.sh
+
+# ── Quickwit runtime ───────────────────────────
+
+download_quickwit
+build_dns_local
+build_quickwit_base
 
 # ── Done ──────────────────────────────────────
 

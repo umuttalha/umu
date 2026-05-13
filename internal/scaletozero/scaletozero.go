@@ -257,7 +257,7 @@ func (s *Service) wakeUp(ctx context.Context, project *state.Project, svc *state
 	}
 
 	// Wait for VM to become healthy (HTTP health check on the service port)
-	healthCheckErr := health.CheckWithTimeout(svc.GuestIP, port, WakeTimeout, WakePollInterval)
+	healthCheckErr := health.CheckWithPath(svc.GuestIP, port, health.HealthPathForRuntime(project.Runtime), WakeTimeout, WakePollInterval)
 	if healthCheckErr != nil {
 		compute.StopVMByPID(vm.PID, cfg.SocketPath)
 		return fmt.Errorf("VM started but failed health check: %w", healthCheckErr)

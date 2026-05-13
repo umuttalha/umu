@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/umuttalha/umut/internal/network"
 	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
+	"github.com/umuttalha/umut/internal/runtime"
 	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/state"
 	"github.com/umuttalha/umut/internal/storage"
@@ -55,7 +58,7 @@ Example:
 func init() {
 	deployCmd.Flags().IntVar(&deployCPUs, "cpus", 0, "number of vCPUs (overrides umut.toml)")
 	deployCmd.Flags().IntVar(&deployMemory, "memory", 0, "memory in MB (overrides umut.toml)")
-	deployCmd.Flags().IntVar(&deployPort, "port", 8080, "target port inside the VM")
+	deployCmd.Flags().IntVar(&deployPort, "port", 0, "target port inside the VM (default: runtime-specific)")
 	deployCmd.Flags().BoolVar(&deployAlwaysOn, "always-on", false, "disable scale-to-zero for this project")
 	deployCmd.Flags().Int64Var(&deployIOBandwidth, "io-bandwidth", 0, "per-VM I/O bandwidth in bytes/sec (0 = default 100MB/s)")
 	deployCmd.Flags().IntVar(&deployPidsMax, "pids-max", 0, "per-VM PID limit (0 = default 4096)")
@@ -79,6 +82,12 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	cfg.MergeCLI(deployCPUs, deployMemory, deployAlwaysOn)
 
+	// Resolve service port: CLI flag takes precedence, else use runtime default
+	servicePort := deployPort
+	if servicePort == 0 {
+		servicePort = config.RuntimeDefaultPort(cfg.Services[0].Runtime)
+	}
+
 	// Load state
 	store, err := state.NewStore()
 	if err != nil {
@@ -95,7 +104,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		if existing.Status == state.StatusCreating {
 			return fmt.Errorf("project %q is in a broken state (creating) — run 'umut destroy %s' first", projectName, projectName)
 		}
-		return runRollingUpdate(existing, cfg, store, cwd, deployPort)
+		return runRollingUpdate(existing, cfg, store, cwd, servicePort)
 	}
 
 	fmt.Printf("  Deploying %s (%d services)\n", projectName, len(cfg.Services))
@@ -139,6 +148,18 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		hostsMapping = append(hostsMapping, fmt.Sprintf("%s:%s", p.guestIP, p.sCfg.Name))
 	}
 	hostsString := strings.Join(hostsMapping, ",")
+
+	if cfg.Services[0].Runtime == "quickwit" {
+		s3Cfg := config.GlobalS3Config()
+		if s3Cfg.Endpoint != "" {
+			hostsString = appendResolvedHosts(hostsString, s3Cfg.Endpoint)
+			if s3Cfg.Bucket != "" {
+				bucketHost := s3Cfg.Bucket + "." + extractHostname(s3Cfg.Endpoint)
+				hostsString = appendMappedHost(hostsString, s3Cfg.Endpoint, bucketHost)
+			}
+		}
+		hostsString = appendResolvedHosts(hostsString, "https://telemetry.quickwit.io")
+	}
 
 	// Pre-check Storage Box availability
 	useSharedRoot := storage.SharedRootExists(cfg.Services[0].Runtime)
@@ -187,7 +208,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		if storage.SharedRootExists(sCfg.Runtime) {
 			var dataDiskPath string
 
-			if sCfg.Storage != "local" && storageBoxAvailable && stateDiskErr == nil {
+			if sCfg.Storage != "local" && storageBoxAvailable && stateDiskErr == nil && sCfg.Runtime != "quickwit" {
 				dataDiskPath = stateDiskPath
 				st.stateDisk = stateDiskPath
 			} else {
@@ -257,6 +278,34 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			}
 		}
 		st.mergedEnv = mergedEnv
+
+		if sCfg.Runtime == "quickwit" {
+			s3Cfg := config.GlobalS3Config()
+			qwConfig, qwErr := runtime.QuickwitConfig(s3Cfg.Endpoint, s3Cfg.Region, s3Cfg.Bucket, projectName)
+			if qwErr != nil {
+				st.err = fmt.Errorf("quickwit config: %w", qwErr)
+				return st
+			}
+			targetDisk := st.diskPath
+			if st.userDataDisk != "" {
+				targetDisk = st.userDataDisk
+			}
+			if err := injectConfigFile(targetDisk, "quickwit.yaml", qwConfig); err != nil {
+				st.err = fmt.Errorf("inject quickwit config: %w", err)
+				return st
+			}
+			if s3Cfg.AccessKeyID != "" && s3Cfg.SecretAccessKey != "" {
+				if st.mergedEnv == nil {
+					st.mergedEnv = make(map[string]string)
+				}
+				st.mergedEnv["AWS_ACCESS_KEY_ID"] = s3Cfg.AccessKeyID
+				st.mergedEnv["AWS_SECRET_ACCESS_KEY"] = s3Cfg.SecretAccessKey
+				st.mergedEnv["QW_DISABLE_TELEMETRY"] = "1"
+				if st.userDataDisk != "" {
+					storage.InjectSecrets(st.userDataDisk, st.mergedEnv)
+				}
+			}
+		}
 
 		if len(sCfg.Volumes) > 0 {
 			for vIdx := range sCfg.Volumes {
@@ -390,7 +439,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			TAPDevice:    plans[i].tapName,
 			GuestIP:      plans[i].guestIP,
 			MACAddress:   plans[i].mac,
-			ServicePort:  deployPort,
+			ServicePort:  servicePort,
 			DiskPath:     st.diskPath,
 			RootReadOnly: st.rootReadOnly,
 			UserDataDisk: st.userDataDisk,
@@ -481,7 +530,8 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 				continue
 			}
 			g.Go(func() error {
-				return health.CheckWithTimeout(plans[i].guestIP, deployPort, 10*time.Second, 100*time.Millisecond)
+				path := health.HealthPathForRuntime(plans[i].sCfg.Runtime)
+				return health.CheckWithPath(plans[i].guestIP, servicePort, path, 30*time.Second, 100*time.Millisecond)
 			})
 		}
 		if err := g.Wait(); err != nil {
@@ -492,8 +542,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	} else {
 		for i := range plans {
 			if plans[i].sCfg.Expose {
+				path := health.HealthPathForRuntime(plans[i].sCfg.Runtime)
 				fmt.Printf("  ● Waiting for VM to boot...")
-				if err := health.CheckWithTimeout(plans[i].guestIP, deployPort, 10*time.Second, 100*time.Millisecond); err != nil {
+				if err := health.CheckWithPath(plans[i].guestIP, servicePort, path, 30*time.Second, 100*time.Millisecond); err != nil {
 					fmt.Printf(" warning: %v\n", err)
 				} else {
 					fmt.Printf(" done\n")
@@ -513,7 +564,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  ● Configuring proxy...")
 			routeHostname := proj.RouteHostname(projectName, plans[i].sCfg.Name)
 			if plans[i].sCfg.AlwaysOn {
-				if err := routing.AddRoute(routeHostname, svcState.GuestIP, 8080); err != nil {
+				if err := routing.AddRoute(routeHostname, svcState.GuestIP, servicePort); err != nil {
 					fmt.Printf(" warning: caddy route failed: %v\n", err)
 				}
 			} else {
@@ -541,7 +592,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *state.Store, cwd string, deployPort int) error {
+func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *state.Store, cwd string, servicePort int) error {
 	start := time.Now()
 
 	projectIndex := extractProjectIndexFromServices(existing)
@@ -673,6 +724,16 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 		vmCfg.MemoryMB = sCfg.MemoryMB
 		vmCfg.RootReadOnly = rootReadOnly
 		vmCfg.HostsMapping = buildHostsMapping(sCfg.Name, guestIP)
+		if sCfg.Runtime == "quickwit" {
+			s3Cfg := config.GlobalS3Config()
+			if s3Cfg.Endpoint != "" {
+				vmCfg.HostsMapping = appendResolvedHosts(vmCfg.HostsMapping, s3Cfg.Endpoint)
+				if s3Cfg.Bucket != "" {
+					bucketHost := s3Cfg.Bucket + "." + extractHostname(s3Cfg.Endpoint)
+					vmCfg.HostsMapping = appendMappedHost(vmCfg.HostsMapping, s3Cfg.Endpoint, bucketHost)
+				}
+			}
+		}
 		vmCfg.IOBandwidthBps = deployIOBandwidth
 		vmCfg.PidsMax = deployPidsMax
 		vmCfg.SkipDiskCheck = deploySkipDiskCheck
@@ -768,7 +829,8 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 
 		if sCfg.Expose {
 			fmt.Printf("  ● Health-checking v%d...", newVersion)
-			if err := health.Check(guestIP, deployPort); err != nil {
+			hpath := health.HealthPathForRuntime(sCfg.Runtime)
+			if err := health.CheckWithPath(guestIP, servicePort, hpath, 30*time.Second, 100*time.Millisecond); err != nil {
 				fmt.Printf(" FAILED\n")
 				metadata.Deregister(guestIP)
 				compute.StopVMByPID(vm.PID, vmCfg.SocketPath)
@@ -780,9 +842,9 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 
 		fmt.Printf("  ● Switching traffic to v%d...", newVersion)
 		if sCfg.Expose {
-			routeHostname := proj.RouteHostname(existing.Name, sCfg.Name)
-			if sCfg.AlwaysOn {
-				if err := routing.UpdateRoute(routeHostname, guestIP, deployPort); err != nil {
+				routeHostname := proj.RouteHostname(existing.Name, sCfg.Name)
+				if sCfg.AlwaysOn {
+					if err := routing.UpdateRoute(routeHostname, guestIP, servicePort); err != nil {
 					compute.StopVMByPID(vm.PID, vmCfg.SocketPath)
 					storage.DeleteDisk(versionedName)
 					return fmt.Errorf("route update failed — old VM left running: %w", err)
@@ -841,7 +903,7 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 			SocketPath:   vmCfg.SocketPath,
 			MACAddress:   mac,
 			KernelArgs:   kernelArgs,
-			ServicePort:  deployPort,
+			ServicePort:  servicePort,
 		}
 
 		if len(svcVols) > 0 {
@@ -909,6 +971,76 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 	fmt.Printf("  ✓ Upgraded %s  (%s)\n", existing.Name, elapsed.Round(time.Millisecond))
 
 	return nil
+}
+
+func injectConfigFile(diskPath, filename, content string) error {
+	mnt, err := os.MkdirTemp("", "umut-config-")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(mnt)
+
+	if out, err := exec.Command("mount", diskPath, mnt).CombinedOutput(); err != nil {
+		return fmt.Errorf("mount disk %s: %s: %w", diskPath, string(out), err)
+	}
+	defer exec.Command("umount", mnt).Run()
+
+	return os.WriteFile(filepath.Join(mnt, filename), []byte(content), 0644)
+}
+
+func appendResolvedHosts(hostsMapping, endpointURL string) string {
+	hostname := endpointURL
+	hostname = strings.TrimPrefix(hostname, "https://")
+	hostname = strings.TrimPrefix(hostname, "http://")
+	hostname = strings.SplitN(hostname, "/", 2)[0]
+	hostname = strings.SplitN(hostname, ":", 2)[0]
+
+	ips, err := net.LookupHost(hostname)
+	if err != nil {
+		fmt.Printf("  warning: failed to resolve S3 endpoint %s: %v\n", hostname, err)
+		return hostsMapping
+	}
+
+	var entries []string
+	if hostsMapping != "" {
+		entries = append(entries, hostsMapping)
+	}
+	for _, ip := range ips {
+		if !strings.Contains(ip, ":") {
+			entries = append(entries, fmt.Sprintf("%s:%s", ip, hostname))
+		}
+	}
+	return strings.Join(entries, ",")
+}
+
+func extractHostname(endpointURL string) string {
+	h := endpointURL
+	h = strings.TrimPrefix(h, "https://")
+	h = strings.TrimPrefix(h, "http://")
+	h = strings.SplitN(h, "/", 2)[0]
+	h = strings.SplitN(h, ":", 2)[0]
+	return h
+}
+
+func appendMappedHost(hostsMapping, endpointURL, bucketHost string) string {
+	hostname := extractHostname(endpointURL)
+	if hostname == "" || bucketHost == "" {
+		return hostsMapping
+	}
+	var entries []string
+	if hostsMapping != "" {
+		parts := strings.Split(hostsMapping, ",")
+		for _, p := range parts {
+			kv := strings.SplitN(p, ":", 2)
+			if len(kv) == 2 && kv[1] == hostname {
+				entries = append(entries, fmt.Sprintf("%s:%s", kv[0], bucketHost))
+			}
+		}
+	}
+	if len(entries) > 0 {
+		return hostsMapping + "," + strings.Join(entries, ",")
+	}
+	return hostsMapping
 }
 
 func extractProjectIndexFromServices(project *state.Project) int {

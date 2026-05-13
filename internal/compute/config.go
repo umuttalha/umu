@@ -114,6 +114,10 @@ const (
 	StorageBoxMount   = "/mnt/storagebox"
 	StateDiskSubdir   = "projects"
 
+	DefaultQuickwitPort   = 7280
+	DefaultQuickwitVCPUs  = 2
+	DefaultQuickwitMemory = 1024
+
 	// CNI networking
 	CNINetworkName = "umut"
 	CNIGateway     = "172.26.0.1"

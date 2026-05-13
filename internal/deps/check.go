@@ -46,6 +46,10 @@ func Check(requirementsPath, manifestPath string) ([]string, error) {
 // CheckFromBase mounts the base image, reads the manifest, and checks
 // requirements against it.
 func CheckFromBase(requirementsPath, baseImagePath string) ([]string, error) {
+	if strings.Contains(baseImagePath, "quickwit-base") {
+		return nil, nil
+	}
+
 	mountDir, err := os.MkdirTemp("", "umut-deps-")
 	if err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)

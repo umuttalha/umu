@@ -110,6 +110,7 @@ func (s *Server) unfreezeProject(name string) error {
 		svc.SocketPath = vm.Config.SocketPath
 	}
 
+	hpath := health.HealthPathForRuntime(project.Runtime)
 	if len(project.Services) > 1 {
 		g := new(errgroup.Group)
 		for i := range project.Services {
@@ -119,14 +120,14 @@ func (s *Server) unfreezeProject(name string) error {
 			}
 			svc := project.Services[i]
 			g.Go(func() error {
-				return health.CheckWithTimeout(svc.GuestIP, svc.ServicePort, 5*time.Second, 100*time.Millisecond)
+				return health.CheckWithPath(svc.GuestIP, svc.ServicePort, hpath, 5*time.Second, 100*time.Millisecond)
 			})
 		}
 		g.Wait()
 	} else {
 		for _, svc := range project.Services {
 			if svc.Expose {
-				health.CheckWithTimeout(svc.GuestIP, svc.ServicePort, 5*time.Second, 100*time.Millisecond)
+				health.CheckWithPath(svc.GuestIP, svc.ServicePort, hpath, 5*time.Second, 100*time.Millisecond)
 			}
 		}
 	}

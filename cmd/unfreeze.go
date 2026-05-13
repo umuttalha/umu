@@ -153,6 +153,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Phase 4: Parallel health checks ---
+	hpath := health.HealthPathForRuntime(project.Runtime)
 	if len(services) > 1 {
 		g := new(errgroup.Group)
 		for i := range services {
@@ -161,7 +162,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 				continue
 			}
 			g.Go(func() error {
-				return health.CheckWithTimeout(services[i].GuestIP, services[i].ServicePort, 5*time.Second, 100*time.Millisecond)
+				return health.CheckWithPath(services[i].GuestIP, services[i].ServicePort, hpath, 5*time.Second, 100*time.Millisecond)
 			})
 		}
 		if err := g.Wait(); err != nil {
@@ -173,7 +174,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 		for _, svc := range services {
 			if svc.Expose {
 				fmt.Printf("  ● Waiting for VM to boot...")
-				if err := health.CheckWithTimeout(svc.GuestIP, svc.ServicePort, 5*time.Second, 100*time.Millisecond); err != nil {
+				if err := health.CheckWithPath(svc.GuestIP, svc.ServicePort, hpath, 5*time.Second, 100*time.Millisecond); err != nil {
 					fmt.Printf(" warning: %v\n", err)
 				} else {
 					fmt.Printf(" done\n")

@@ -44,6 +44,15 @@ func ensureSharedBridge() {
 		run("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", compute.CNISubnetBase+".0.0/16", "-o", HostInterface, "-j", "MASQUERADE")
 		run("iptables", "-A", "FORWARD", "-i", SharedBridge, "-j", "ACCEPT")
 		run("iptables", "-A", "FORWARD", "-o", SharedBridge, "-j", "ACCEPT")
+		run("iptables", "-A", "FORWARD", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+	}
+	run("sysctl", "-w", "net.ipv4.conf."+SharedBridge+".route_localnet=1")
+	run("sysctl", "-w", "net.ipv4.conf.all.route_localnet=1")
+	if err := run("iptables", "-t", "nat", "-C", "PREROUTING", "-i", SharedBridge, "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53"); err != nil {
+		run("iptables", "-t", "nat", "-A", "PREROUTING", "-i", SharedBridge, "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")
+	}
+	if err := run("iptables", "-t", "nat", "-C", "PREROUTING", "-i", SharedBridge, "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53"); err != nil {
+		run("iptables", "-t", "nat", "-A", "PREROUTING", "-i", SharedBridge, "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")
 	}
 }
 
@@ -75,6 +84,8 @@ func DestroyTAP(tapName string) error {
 }
 
 func DestroySharedBridge() error {
+	run("iptables", "-t", "nat", "-D", "PREROUTING", "-i", SharedBridge, "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")
+	run("iptables", "-t", "nat", "-D", "PREROUTING", "-i", SharedBridge, "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")
 	run("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", compute.CNISubnetBase+".0.0/16", "-o", HostInterface, "-j", "MASQUERADE")
 	run("iptables", "-D", "FORWARD", "-i", SharedBridge, "-j", "ACCEPT")
 	run("iptables", "-D", "FORWARD", "-o", SharedBridge, "-j", "ACCEPT")
@@ -99,6 +110,8 @@ func SetupVMFirewall(guestIP string) error {
 		{"iptables", "-A", "FORWARD", "-s", guestIP, "-d", "10.0.0.0/8", "-j", "DROP"},
 		{"iptables", "-A", "FORWARD", "-s", guestIP, "-d", "172.16.0.0/12", "-j", "DROP"},
 		{"iptables", "-A", "FORWARD", "-s", guestIP, "-d", "192.168.0.0/16", "-j", "DROP"},
+		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "udp", "--dport", "53", "-j", "ACCEPT"},
+		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"},
 		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "443", "-j", "ACCEPT"},
 		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"},
 		{"iptables", "-A", "FORWARD", "-s", guestIP, "-j", "DROP"},
@@ -120,6 +133,8 @@ func RemoveVMFirewall(guestIP string) error {
 		{"iptables", "-D", "FORWARD", "-s", guestIP, "-d", "10.0.0.0/8", "-j", "DROP"},
 		{"iptables", "-D", "FORWARD", "-s", guestIP, "-d", "172.16.0.0/12", "-j", "DROP"},
 		{"iptables", "-D", "FORWARD", "-s", guestIP, "-d", "192.168.0.0/16", "-j", "DROP"},
+		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "udp", "--dport", "53", "-j", "ACCEPT"},
+		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"},
 		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "443", "-j", "ACCEPT"},
 		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"},
 		{"iptables", "-D", "FORWARD", "-s", guestIP, "-j", "DROP"},

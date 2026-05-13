@@ -8,11 +8,13 @@ import (
 
 	"github.com/umuttalha/umut/internal/audit"
 	"github.com/umuttalha/umut/internal/compute"
+	"github.com/umuttalha/umut/internal/config"
 	"github.com/umuttalha/umut/internal/health"
 	"github.com/umuttalha/umut/internal/metadata"
 	"github.com/umuttalha/umut/internal/network"
 	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
+	qwrt "github.com/umuttalha/umut/internal/runtime"
 	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/state"
 	"github.com/umuttalha/umut/internal/storage"
@@ -76,14 +78,18 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 	}
 
 	for i := range req.Services {
+		sr := req.Services[i].Runtime
+		if sr == "" {
+			sr = runtime
+		}
 		if req.Services[i].VCPUs == 0 {
-			req.Services[i].VCPUs = 1
+			req.Services[i].VCPUs = config.RuntimeDefaultVCPUs(sr)
 		}
 		if req.Services[i].MemoryMB == 0 {
-			req.Services[i].MemoryMB = 256
+			req.Services[i].MemoryMB = config.RuntimeDefaultMemory(sr)
 		}
 		if req.Services[i].Port == 0 {
-			req.Services[i].Port = 8080
+			req.Services[i].Port = config.RuntimeDefaultPort(sr)
 		}
 	}
 
@@ -171,6 +177,40 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 			storage.InjectSecrets(targetDisk, mergedEnv)
 		}
 
+		if svcRuntime == "quickwit" {
+			s3Cfg := config.GlobalS3Config()
+			envVars := mergedEnv
+			if envVars == nil {
+				envVars = make(map[string]string)
+			}
+			if s3Cfg.AccessKeyID != "" {
+				envVars["AWS_ACCESS_KEY_ID"] = s3Cfg.AccessKeyID
+			}
+			if s3Cfg.SecretAccessKey != "" {
+				envVars["AWS_SECRET_ACCESS_KEY"] = s3Cfg.SecretAccessKey
+			}
+			if s3Cfg.Token != "" {
+				envVars["AWS_SESSION_TOKEN"] = s3Cfg.Token
+			}
+			qwConfig, qwErr := qwrt.QuickwitConfig(qwrt.ResolveEndpointIP(s3Cfg.Endpoint), s3Cfg.Region, s3Cfg.Bucket, name)
+			if qwErr != nil {
+				writeError(w, http.StatusInternalServerError, "quickwit config: "+qwErr.Error())
+				return
+			}
+			targetDisk := diskPath
+			if userDataDisk != "" {
+				targetDisk = userDataDisk
+			}
+			if err := injectConfigFileAPI(targetDisk, "quickwit.yaml", qwConfig); err != nil {
+				writeError(w, http.StatusInternalServerError, "inject quickwit config: "+err.Error())
+				return
+			}
+			if len(envVars) > 0 && userDataDisk != "" {
+				storage.InjectSecrets(userDataDisk, envVars)
+			}
+			mergedEnv = envVars
+		}
+
 		if mdJSON, mdErr := compute.BuildMetadataJSON(vmCfg, mergedEnv); mdErr == nil {
 			vmCfg.MetadataJSON = mdJSON
 		}
@@ -205,7 +245,7 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 
 	for i, svc := range newServices {
 		if svc.Expose {
-			_ = health.CheckWithTimeout(svc.GuestIP, svc.ServicePort, 5*time.Second, 100*time.Millisecond)
+			_ = health.CheckWithPath(svc.GuestIP, svc.ServicePort, health.HealthPathForRuntime(runtime), 5*time.Second, 100*time.Millisecond)
 		}
 		_ = i
 	}

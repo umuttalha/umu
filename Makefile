@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X '$(MODULE)/cmd.Commit=$(COMMIT)' \
 	-X '$(MODULE)/cmd.BuildDate=$(BUILD_DATE)'
 
-.PHONY: build build-init install clean vet test deploy
+.PHONY: build build-init build-dns-local install clean vet test deploy build-quickwit-base rebuild-quickwit-base-server
 
 SERVER ?= root@localhost
 # Set SERVER explicitly: make deploy SERVER=root@your-server-ip
@@ -19,6 +19,9 @@ build:
 
 build-init:
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o umut-init ./cmd/umut-init/
+
+build-dns-local:
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dns-local ./cmd/dns-local/
 
 install: build
 	sudo mv $(BINARY) /usr/local/bin/$(BINARY)
@@ -34,8 +37,18 @@ test:
 	CGO_ENABLED=0 GOOS=linux go test ./...
 
 ## Push updated umut binary to remote server (no full reinstall needed).
-deploy: build build-init
+deploy: build build-init build-dns-local
 	ssh $(SERVER) "systemctl stop umut-daemon 2>/dev/null; sleep 1"
 	scp $(BINARY) $(SERVER):/usr/local/bin/umut
 	scp umut-init $(SERVER):/usr/local/bin/umut-init
-	ssh $(SERVER) "chmod +x /usr/local/bin/umut /usr/local/bin/umut-init && systemctl start umut-daemon && echo '✓ umut + umut-init updated on $(SERVER)'"
+	scp dns-local $(SERVER):/usr/local/bin/dns-local
+	ssh $(SERVER) "chmod +x /usr/local/bin/umut /usr/local/bin/umut-init /usr/local/bin/dns-local && systemctl start umut-daemon && echo '✓ umut + umut-init + dns-local updated on $(SERVER)'"
+
+build-quickwit-base:
+	@echo "Building Quickwit base image..."
+	sudo bash install.sh
+
+rebuild-quickwit-base-server:
+	scp install.sh $(SERVER):/tmp/umut-rebuild.sh
+	ssh $(SERVER) "rm -f /var/lib/umut/images/quickwit-base.ext4 /var/lib/umut/checksums/quickwit-base.ext4.sha256 && bash /tmp/umut-rebuild.sh && rm -f /tmp/umut-rebuild.sh"
+	@echo "✓ quickwit-base.ext4 rebuilt on $(SERVER)"

@@ -12,6 +12,93 @@ import (
 
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$`)
 
+var validRuntimes = map[string]bool{
+	"python":   true,
+	"deno":     true,
+	"quickwit": true,
+}
+
+var runtimeDefaults = map[string]struct {
+	Port   int
+	VCPUs  int
+	Memory int
+}{
+	"python":   {Port: 8080, VCPUs: 1, Memory: 256},
+	"deno":     {Port: 8080, VCPUs: 1, Memory: 256},
+	"quickwit": {Port: 7280, VCPUs: 2, Memory: 1024},
+}
+
+func RuntimeDefaultPort(runtime string) int {
+	if d, ok := runtimeDefaults[runtime]; ok {
+		return d.Port
+	}
+	return 8080
+}
+
+func RuntimeDefaultVCPUs(runtime string) int {
+	if d, ok := runtimeDefaults[runtime]; ok {
+		return d.VCPUs
+	}
+	return 1
+}
+
+func RuntimeDefaultMemory(runtime string) int {
+	if d, ok := runtimeDefaults[runtime]; ok {
+		return d.Memory
+	}
+	return 256
+}
+
+// S3Config holds global S3 credentials for managed Quickwit instances.
+// Configured in /etc/umut/umut.toml under the [s3] section.
+type S3Config struct {
+	Endpoint        string `toml:"endpoint"`
+	Region          string `toml:"region"`
+	Bucket          string `toml:"bucket"`
+	AccessKeyID     string `toml:"access_key_id"`
+	SecretAccessKey string `toml:"secret_access_key"`
+	Token           string `toml:"token"`
+}
+
+// GlobalS3Config parses the [s3] section from umut.toml and merges with env vars.
+func GlobalS3Config() S3Config {
+	cfg := S3Config{
+		Endpoint: os.Getenv("UMUT_S3_ENDPOINT"),
+		Region:   os.Getenv("UMUT_S3_REGION"),
+		Bucket:   os.Getenv("UMUT_S3_BUCKET"),
+	}
+
+	data, err := os.ReadFile("/etc/umut/umut.toml")
+	if err != nil {
+		return cfg
+	}
+
+	var top struct {
+		S3 S3Config `toml:"s3"`
+	}
+	if toml.Unmarshal(data, &top) == nil {
+		if top.S3.Endpoint != "" {
+			cfg.Endpoint = top.S3.Endpoint
+		}
+		if top.S3.Region != "" {
+			cfg.Region = top.S3.Region
+		}
+		if top.S3.Bucket != "" {
+			cfg.Bucket = top.S3.Bucket
+		}
+		if top.S3.AccessKeyID != "" {
+			cfg.AccessKeyID = top.S3.AccessKeyID
+		}
+		if top.S3.SecretAccessKey != "" {
+			cfg.SecretAccessKey = top.S3.SecretAccessKey
+		}
+		if top.S3.Token != "" {
+			cfg.Token = top.S3.Token
+		}
+	}
+	return cfg
+}
+
 // UmutConfig represents the merged configuration for a deployment.
 type UmutConfig struct {
 	Runtime  string          `toml:"runtime"` // "python" (default) or "deno"
@@ -76,8 +163,8 @@ func Load(dir string) (UmutConfig, error) {
 	}
 
 	if tempCfg.Runtime != "" {
-		if tempCfg.Runtime != "python" && tempCfg.Runtime != "deno" {
-			return cfg, fmt.Errorf("invalid runtime %q (must be 'python' or 'deno')", tempCfg.Runtime)
+		if !validRuntimes[tempCfg.Runtime] {
+			return cfg, fmt.Errorf("invalid runtime %q (must be one of: python, deno, quickwit)", tempCfg.Runtime)
 		}
 		cfg.Runtime = tempCfg.Runtime
 	}
@@ -102,11 +189,16 @@ func Load(dir string) (UmutConfig, error) {
 			if err := validateVolumePaths(s.Volumes); err != nil {
 				return cfg, fmt.Errorf("service %q: %w", s.Name, err)
 			}
+			if s.Runtime == "" {
+				s.Runtime = cfg.Runtime
+			} else if !validRuntimes[s.Runtime] {
+				return cfg, fmt.Errorf("service %q: invalid runtime %q (must be one of: python, deno, quickwit)", s.Name, s.Runtime)
+			}
 			if s.VCPUs == 0 {
-				s.VCPUs = 1
+				s.VCPUs = RuntimeDefaultVCPUs(s.Runtime)
 			}
 			if s.MemoryMB == 0 {
-				s.MemoryMB = 256
+				s.MemoryMB = RuntimeDefaultMemory(s.Runtime)
 			}
 			if s.BuildDir == "" {
 				s.BuildDir = "./"
@@ -119,11 +211,6 @@ func Load(dir string) (UmutConfig, error) {
 			}
 			if s.Storage != "" && s.Storage != "local" && s.Storage != "storagebox" {
 				return cfg, fmt.Errorf("service %q: invalid storage %q (must be 'local' or 'storagebox')", s.Name, s.Storage)
-			}
-			if s.Runtime == "" {
-				s.Runtime = cfg.Runtime
-			} else if s.Runtime != "python" && s.Runtime != "deno" {
-				return cfg, fmt.Errorf("service %q: invalid runtime %q (must be 'python' or 'deno')", s.Name, s.Runtime)
 			}
 			// Auto-detect runtime from build_dir files only when no runtime was
 			// explicitly set anywhere (top level or any service). This prevents

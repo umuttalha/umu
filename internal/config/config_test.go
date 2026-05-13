@@ -212,3 +212,98 @@ func TestStorageFieldInvalid(t *testing.T) {
 		t.Fatal("expected error for invalid storage value")
 	}
 }
+
+func TestRuntimeDefaultPort(t *testing.T) {
+	if p := RuntimeDefaultPort("quickwit"); p != 7280 {
+		t.Errorf("expected quickwit port 7280, got %d", p)
+	}
+	if p := RuntimeDefaultPort("python"); p != 8080 {
+		t.Errorf("expected python port 8080, got %d", p)
+	}
+	if p := RuntimeDefaultPort("deno"); p != 8080 {
+		t.Errorf("expected deno port 8080, got %d", p)
+	}
+	if p := RuntimeDefaultPort("unknown"); p != 8080 {
+		t.Errorf("expected unknown runtime fallback port 8080, got %d", p)
+	}
+}
+
+func TestRuntimeDefaultVCPUs(t *testing.T) {
+	if v := RuntimeDefaultVCPUs("quickwit"); v != 2 {
+		t.Errorf("expected quickwit vcpus 2, got %d", v)
+	}
+	if v := RuntimeDefaultVCPUs("python"); v != 1 {
+		t.Errorf("expected python vcpus 1, got %d", v)
+	}
+	if v := RuntimeDefaultVCPUs("unknown"); v != 1 {
+		t.Errorf("expected unknown runtime fallback vcpus 1, got %d", v)
+	}
+}
+
+func TestRuntimeDefaultMemory(t *testing.T) {
+	if m := RuntimeDefaultMemory("quickwit"); m != 1024 {
+		t.Errorf("expected quickwit memory 1024, got %d", m)
+	}
+	if m := RuntimeDefaultMemory("python"); m != 256 {
+		t.Errorf("expected python memory 256, got %d", m)
+	}
+	if m := RuntimeDefaultMemory("unknown"); m != 256 {
+		t.Errorf("expected unknown runtime fallback memory 256, got %d", m)
+	}
+}
+
+func TestRuntimeQuickwitFromTOML(t *testing.T) {
+	tempDir := t.TempDir()
+	tomlPath := filepath.Join(tempDir, "umut.toml")
+
+	tomlContent := []byte("runtime = \"quickwit\"\n\n[[services]]\nname = \"main\"\n")
+	if err := os.WriteFile(tomlPath, tomlContent, 0644); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+
+	cfg, err := Load(tempDir)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Runtime != "quickwit" {
+		t.Errorf("expected runtime 'quickwit', got %q", cfg.Runtime)
+	}
+}
+
+func TestRuntimeQuickwitDefaults(t *testing.T) {
+	tempDir := t.TempDir()
+	tomlPath := filepath.Join(tempDir, "umut.toml")
+
+	tomlContent := []byte("runtime = \"quickwit\"\n\n[[services]]\nname = \"main\"\n")
+	if err := os.WriteFile(tomlPath, tomlContent, 0644); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+
+	cfg, err := Load(tempDir)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(cfg.Services))
+	}
+	if cfg.Services[0].VCPUs != 2 {
+		t.Errorf("expected quickwit default vcpus 2, got %d", cfg.Services[0].VCPUs)
+	}
+	if cfg.Services[0].MemoryMB != 1024 {
+		t.Errorf("expected quickwit default memory 1024, got %d", cfg.Services[0].MemoryMB)
+	}
+}
+
+func TestValidRuntimes(t *testing.T) {
+	for _, rt := range []string{"python", "deno", "quickwit"} {
+		if !validRuntimes[rt] {
+			t.Errorf("expected %q to be a valid runtime", rt)
+		}
+	}
+	invalid := []string{"go", "rust", "node", "java", ""}
+	for _, rt := range invalid {
+		if validRuntimes[rt] {
+			t.Errorf("expected %q to be an invalid runtime", rt)
+		}
+	}
+}
