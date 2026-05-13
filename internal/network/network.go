@@ -105,6 +105,9 @@ func SetupVMFirewall(guestIP string) error {
 		return nil
 	}
 	rules := [][]string{
+		// Insert at top: block VM-to-VM agent access — only the bridge gateway (host) can exec
+		{"iptables", "-I", "FORWARD", "1", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-s", compute.CNIGateway, "-j", "ACCEPT"},
+		{"iptables", "-I", "FORWARD", "2", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-j", "DROP"},
 		{"iptables", "-A", "FORWARD", "-s", guestIP, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "25", "-j", "DROP"},
 		{"iptables", "-A", "FORWARD", "-s", guestIP, "-d", "10.0.0.0/8", "-j", "DROP"},
@@ -129,6 +132,9 @@ func RemoveVMFirewall(guestIP string) error {
 		return nil
 	}
 	rules := [][]string{
+		// Remove agent access rules
+		{"iptables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-s", compute.CNIGateway, "-j", "ACCEPT"},
+		{"iptables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-j", "DROP"},
 		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "25", "-j", "DROP"},
 		{"iptables", "-D", "FORWARD", "-s", guestIP, "-d", "10.0.0.0/8", "-j", "DROP"},
 		{"iptables", "-D", "FORWARD", "-s", guestIP, "-d", "172.16.0.0/12", "-j", "DROP"},

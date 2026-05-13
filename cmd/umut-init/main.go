@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/umuttalha/umut/internal/agent"
 	"github.com/vishvananda/netlink"
 )
 
@@ -37,6 +38,13 @@ func main() {
 	}
 
 	mountVolumes(vols)
+
+	go func() {
+		log.Println("[umut-init] Starting exec agent on :9999")
+		if err := agent.RunGuestAgent(agent.AgentPort); err != nil {
+			log.Printf("[umut-init] Exec agent exited: %v", err)
+		}
+	}()
 
 	envVars := parseEnvFromDisk()
 	if len(envVars) == 0 {
