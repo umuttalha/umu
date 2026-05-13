@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
 	"github.com/umuttalha/umut/internal/state"
 )
@@ -37,7 +37,7 @@ func runFreeze(cmd *cobra.Command, args []string) error {
 	projectName := args[0]
 	start := time.Now()
 
-	if err := validateProjectName(projectName); err != nil {
+	if err := proj.ValidateName(projectName); err != nil {
 		return err
 	}
 
@@ -87,10 +87,7 @@ func runFreeze(cmd *cobra.Command, args []string) error {
 		}
 
 		if svc.Expose {
-			routeHostname := projectName
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, projectName)
-			}
+			routeHostname := proj.RouteHostname(projectName, svc.Name)
 			fmt.Printf("  ● Removing route %s...", routeHostname)
 			if err := routing.RemoveRoute(routeHostname); err != nil {
 				fmt.Printf(" warning: %v\n", err)
@@ -111,29 +108,4 @@ func runFreeze(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Use 'umut unfreeze %s' to resume.\n", projectName)
 
 	return nil
-}
-
-func parseKernelArg(kernelArgs, key string) string {
-	for _, field := range strings.Fields(kernelArgs) {
-		if strings.HasPrefix(field, key+"=") {
-			return strings.TrimPrefix(field, key+"=")
-		}
-	}
-	return ""
-}
-
-func extractVolsFromArgs(kernelArgs string) []string {
-	vols := parseKernelArg(kernelArgs, "umut.vols")
-	if vols == "" {
-		return nil
-	}
-	return strings.Split(vols, ",")
-}
-
-func extractHostsFromArgs(kernelArgs string) []string {
-	hosts := parseKernelArg(kernelArgs, "umut.hosts")
-	if hosts == "" {
-		return nil
-	}
-	return strings.Split(hosts, ",")
 }

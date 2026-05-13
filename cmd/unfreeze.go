@@ -10,6 +10,7 @@ import (
 	"github.com/umuttalha/umut/internal/health"
 	"github.com/umuttalha/umut/internal/metadata"
 	"github.com/umuttalha/umut/internal/network"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
 	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/state"
@@ -38,7 +39,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 	projectName := args[0]
 	start := time.Now()
 
-	if err := validateProjectName(projectName); err != nil {
+	if err := proj.ValidateName(projectName); err != nil {
 		return err
 	}
 
@@ -185,10 +186,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 	for _, svc := range services {
 		if svc.Expose {
 			fmt.Printf("  ● Configuring proxy...")
-			routeHostname := projectName
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, projectName)
-			}
+			routeHostname := proj.RouteHostname(projectName, svc.Name)
 			if svc.AlwaysOn {
 				if err := routing.AddRoute(routeHostname, svc.GuestIP, svc.ServicePort); err != nil {
 					fmt.Printf(" warning: caddy route failed: %v\n", err)

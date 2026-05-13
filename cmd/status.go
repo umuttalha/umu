@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/state"
 )
 
@@ -27,7 +28,7 @@ func init() {
 func runStatus(cmd *cobra.Command, args []string) error {
 	projectName := args[0]
 
-	if err := validateProjectName(projectName); err != nil {
+	if err := proj.ValidateName(projectName); err != nil {
 		return err
 	}
 

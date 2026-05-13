@@ -13,6 +13,7 @@ import (
 	"github.com/umuttalha/umut/internal/compute"
 	"github.com/umuttalha/umut/internal/metadata"
 	"github.com/umuttalha/umut/internal/network"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
 	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/state"
@@ -124,10 +125,7 @@ func (s *Server) batchFreeze(op BatchOp) BatchResult {
 			svc.PID = 0
 		}
 		if svc.Expose {
-			routeHostname := op.Project
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, op.Project)
-			}
+			routeHostname := proj.RouteHostname(op.Project, svc.Name)
 			routing.RemoveRoute(routeHostname)
 		}
 	}
@@ -197,10 +195,7 @@ func (s *Server) batchUnfreeze(op BatchOp) BatchResult {
 
 	for _, svc := range project.Services {
 		if svc.Expose {
-			routeHostname := op.Project
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, op.Project)
-			}
+			routeHostname := proj.RouteHostname(op.Project, svc.Name)
 			if svc.AlwaysOn {
 				routing.AddRoute(routeHostname, svc.GuestIP, svc.ServicePort)
 			} else {
@@ -226,10 +221,7 @@ func (s *Server) batchDestroy(op BatchOp) BatchResult {
 			compute.StopVMByPID(svc.PID, svc.SocketPath)
 		}
 		if svc.Expose {
-			routeHostname := op.Project
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, op.Project)
-			}
+			routeHostname := proj.RouteHostname(op.Project, svc.Name)
 			routing.RemoveRoute(routeHostname)
 		}
 		if svc.UserDataDisk != "" {

@@ -12,6 +12,7 @@ import (
 	"github.com/umuttalha/umut/internal/health"
 	"github.com/umuttalha/umut/internal/metadata"
 	"github.com/umuttalha/umut/internal/network"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
 	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/state"
@@ -50,10 +51,7 @@ func (s *Server) handleFreeze(w http.ResponseWriter, r *http.Request, name strin
 		}
 
 		if svc.Expose {
-			routeHostname := name
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, name)
-			}
+			routeHostname := proj.RouteHostname(name, svc.Name)
 			routing.RemoveRoute(routeHostname)
 		}
 	}
@@ -160,10 +158,7 @@ func (s *Server) handleUnfreeze(w http.ResponseWriter, r *http.Request, name str
 
 	for _, svc := range project.Services {
 		if svc.Expose {
-			routeHostname := name
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, name)
-			}
+			routeHostname := proj.RouteHostname(name, svc.Name)
 			if svc.AlwaysOn {
 				routing.AddRoute(routeHostname, svc.GuestIP, svc.ServicePort)
 			} else {

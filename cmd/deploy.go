@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/umuttalha/umut/internal/health"
 	"github.com/umuttalha/umut/internal/metadata"
 	"github.com/umuttalha/umut/internal/network"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
 	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/state"
@@ -25,7 +25,6 @@ import (
 var (
 	deployCPUs          int
 	deployMemory        int
-	deployDisk          int
 	deployPort          int
 	deployAlwaysOn      bool
 	deployIOBandwidth   int64
@@ -56,7 +55,6 @@ Example:
 func init() {
 	deployCmd.Flags().IntVar(&deployCPUs, "cpus", 0, "number of vCPUs (overrides umut.toml)")
 	deployCmd.Flags().IntVar(&deployMemory, "memory", 0, "memory in MB (overrides umut.toml)")
-	deployCmd.Flags().IntVar(&deployDisk, "disk", 1024, "disk size in MB")
 	deployCmd.Flags().IntVar(&deployPort, "port", 8080, "target port inside the VM")
 	deployCmd.Flags().BoolVar(&deployAlwaysOn, "always-on", false, "disable scale-to-zero for this project")
 	deployCmd.Flags().Int64Var(&deployIOBandwidth, "io-bandwidth", 0, "per-VM I/O bandwidth in bytes/sec (0 = default 100MB/s)")
@@ -65,23 +63,11 @@ func init() {
 	rootCmd.AddCommand(deployCmd)
 }
 
-var projectNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,62}[a-z0-9]$`)
-
-func validateProjectName(name string) error {
-	if !projectNameRegex.MatchString(name) {
-		return fmt.Errorf("invalid project name %q: must be 3-64 chars, lowercase alphanumeric, hyphens, and dots", name)
-	}
-	if storage.IsSharedBaseImage(name) {
-		return fmt.Errorf("invalid project name %q: name collides with a shared base image", name)
-	}
-	return nil
-}
-
 func runDeploy(cmd *cobra.Command, args []string) error {
 	projectName := args[0]
 	start := time.Now()
 
-	if err := validateProjectName(projectName); err != nil {
+	if err := proj.ValidateName(projectName); err != nil {
 		return err
 	}
 
@@ -525,10 +511,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 		if plans[i].sCfg.Expose {
 			fmt.Printf("  ● Configuring proxy...")
-			routeHostname := projectName
-			if plans[i].sCfg.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", plans[i].sCfg.Name, projectName)
-			}
+			routeHostname := proj.RouteHostname(projectName, plans[i].sCfg.Name)
 			if plans[i].sCfg.AlwaysOn {
 				if err := routing.AddRoute(routeHostname, svcState.GuestIP, 8080); err != nil {
 					fmt.Printf(" warning: caddy route failed: %v\n", err)
@@ -797,10 +780,7 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 
 		fmt.Printf("  ● Switching traffic to v%d...", newVersion)
 		if sCfg.Expose {
-			routeHostname := existing.Name
-			if sCfg.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", sCfg.Name, existing.Name)
-			}
+			routeHostname := proj.RouteHostname(existing.Name, sCfg.Name)
 			if sCfg.AlwaysOn {
 				if err := routing.UpdateRoute(routeHostname, guestIP, deployPort); err != nil {
 					compute.StopVMByPID(vm.PID, vmCfg.SocketPath)
@@ -903,10 +883,7 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 				compute.StopVMByPID(svc.PID, svc.SocketPath)
 			}
 			if svc.Expose {
-				routeHostname := existing.Name
-				if svc.Name != "main" {
-					routeHostname = fmt.Sprintf("%s-%s", svc.Name, existing.Name)
-				}
+				routeHostname := proj.RouteHostname(existing.Name, svc.Name)
 				routing.RemoveRoute(routeHostname)
 			}
 			if svc.UserDataDisk != "" {

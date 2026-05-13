@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/umuttalha/umut/internal/compute"
 	"github.com/umuttalha/umut/internal/network"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
 	"github.com/umuttalha/umut/internal/state"
 	"github.com/umuttalha/umut/internal/storage"
@@ -45,7 +46,7 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 	projectName := args[0]
 	start := time.Now()
 
-	if err := validateProjectName(projectName); err != nil {
+	if err := proj.ValidateName(projectName); err != nil {
 		return err
 	}
 
@@ -88,10 +89,7 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 
 		// 2. Remove Routes
 		if svc.Expose {
-			routeHostname := projectName
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, projectName)
-			}
+			routeHostname := proj.RouteHostname(projectName, svc.Name)
 			fmt.Printf("  ● Removing route %s...", routeHostname)
 			if err := routing.RemoveRoute(routeHostname); err != nil {
 				fmt.Printf(" warning: %v\n", err)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/umuttalha/umut/internal/compute"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/state"
 )
 
@@ -46,7 +47,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 		serviceName = parts[1]
 	}
 
-	if err := validateProjectName(projectName); err != nil {
+	if err := proj.ValidateName(projectName); err != nil {
 		return err
 	}
 

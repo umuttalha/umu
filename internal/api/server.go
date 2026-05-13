@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/umuttalha/umut/internal/compute"
 	"github.com/umuttalha/umut/internal/config"
 	"github.com/umuttalha/umut/internal/network"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
 	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/secrets"
@@ -397,7 +397,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if !projectNameRegex.MatchString(req.Name) {
+	if !proj.NameRegex.MatchString(req.Name) {
 		writeError(w, http.StatusBadRequest, "invalid project name (3-64 chars, lowercase alphanumeric, hyphens, dots)")
 		return
 	}
@@ -506,10 +506,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		svcState.SocketPath = vm.Config.SocketPath
 
 		if sCfg.Expose {
-			routeHostname := req.Name
-			if sCfg.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", sCfg.Name, req.Name)
-			}
+			routeHostname := proj.RouteHostname(req.Name, sCfg.Name)
 			if sCfg.AlwaysOn {
 				routing.AddRoute(routeHostname, guestIP, 8080)
 			} else {
@@ -542,10 +539,7 @@ func (s *Server) destroyProject(w http.ResponseWriter, r *http.Request, name str
 			compute.StopVMByPID(svc.PID, svc.SocketPath)
 		}
 		if svc.Expose {
-			routeHostname := name
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, name)
-			}
+			routeHostname := proj.RouteHostname(name, svc.Name)
 			routing.RemoveRoute(routeHostname)
 		}
 		if svc.UserDataDisk != "" {
@@ -966,5 +960,3 @@ func withCORS(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
-var projectNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,62}[a-z0-9]$`)

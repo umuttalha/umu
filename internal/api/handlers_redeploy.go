@@ -11,6 +11,7 @@ import (
 	"github.com/umuttalha/umut/internal/health"
 	"github.com/umuttalha/umut/internal/metadata"
 	"github.com/umuttalha/umut/internal/network"
+	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
 	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/state"
@@ -91,10 +92,7 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 			compute.StopVMByPID(svc.PID, svc.SocketPath)
 		}
 		if svc.Expose {
-			routeHostname := name
-			if svc.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", svc.Name, name)
-			}
+			routeHostname := proj.RouteHostname(name, svc.Name)
 			routing.RemoveRoute(routeHostname)
 		}
 	}
@@ -194,10 +192,7 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 		svcState.SocketPath = vm.Config.SocketPath
 
 		if sCfg.Expose {
-			routeHostname := name
-			if sCfg.Name != "main" {
-				routeHostname = fmt.Sprintf("%s-%s", sCfg.Name, name)
-			}
+			routeHostname := proj.RouteHostname(name, sCfg.Name)
 			if sCfg.AlwaysOn {
 				routing.AddRoute(routeHostname, guestIP, sCfg.Port)
 			} else {

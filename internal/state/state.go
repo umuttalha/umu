@@ -1,7 +1,6 @@
 package state
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -319,18 +318,6 @@ func (s *Store) List() []*Project {
 		result = append(result, &p)
 	}
 	return result
-}
-
-func (s *Store) deepCopy(p *Project) *Project {
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(p); err != nil {
-		return p
-	}
-	var copy Project
-	if err := json.NewDecoder(&buf).Decode(&copy); err != nil {
-		return p
-	}
-	return &copy
 }
 
 func insertProject(db *sql.DB, p *Project) error {
