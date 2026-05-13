@@ -255,6 +255,14 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 				fmt.Printf("\n  warning: failed to inject source code: %v\n", err)
 			}
 
+			// Inject SSH (dropbear + host keys + authorized_keys)
+			if err := storage.InjectDropbearSources(st.diskPath); err != nil {
+				fmt.Printf("\n  warning: SSH dropbear injection failed: %v\n", err)
+			} else if err := storage.GenerateDropbearHostKey(st.diskPath); err != nil {
+				fmt.Printf("\n  warning: SSH host key generation failed: %v\n", err)
+			}
+			injectSSHAuthorizedKeys(st.diskPath)
+
 			// For ephemeral VMs in full-clone mode: save source to Storage Box for restore
 			if sCfg.Storage != "local" && ephemeral && storageBoxAvailable {
 				statePath, err := storage.CreateStateDisk(projectName, sCfg.Name)
@@ -715,6 +723,12 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 			if err := storage.InjectInit(diskPath); err != nil {
 				return fmt.Errorf("inject init: %w", err)
 			}
+			if err := storage.InjectDropbearSources(diskPath); err != nil {
+				fmt.Printf("\n  warning: SSH dropbear injection failed: %v\n", err)
+			} else if err := storage.GenerateDropbearHostKey(diskPath); err != nil {
+				fmt.Printf("\n  warning: SSH host key generation failed: %v\n", err)
+			}
+			injectSSHAuthorizedKeys(diskPath)
 			fmt.Printf(" done\n")
 		}
 
@@ -842,9 +856,9 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 
 		fmt.Printf("  ● Switching traffic to v%d...", newVersion)
 		if sCfg.Expose {
-				routeHostname := proj.RouteHostname(existing.Name, sCfg.Name)
-				if sCfg.AlwaysOn {
-					if err := routing.UpdateRoute(routeHostname, guestIP, servicePort); err != nil {
+			routeHostname := proj.RouteHostname(existing.Name, sCfg.Name)
+			if sCfg.AlwaysOn {
+				if err := routing.UpdateRoute(routeHostname, guestIP, servicePort); err != nil {
 					compute.StopVMByPID(vm.PID, vmCfg.SocketPath)
 					storage.DeleteDisk(versionedName)
 					return fmt.Errorf("route update failed — old VM left running: %w", err)
@@ -1055,4 +1069,21 @@ func extractProjectIndexFromServices(project *state.Project) int {
 		}
 	}
 	return len(project.Services)
+}
+
+func injectSSHAuthorizedKeys(diskPath string) {
+	for _, keyPath := range []string{
+		os.ExpandEnv("$HOME/.ssh/id_ed25519.pub"),
+		os.ExpandEnv("$HOME/.ssh/id_rsa.pub"),
+	} {
+		pub, err := os.ReadFile(keyPath)
+		if err != nil {
+			continue
+		}
+		if err := storage.InjectAuthorizedKeys(diskPath, string(pub)); err != nil {
+			fmt.Printf("\n  warning: SSH authorized_keys injection failed: %v\n", err)
+			return
+		}
+		return
+	}
 }

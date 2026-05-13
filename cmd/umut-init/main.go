@@ -46,6 +46,8 @@ func main() {
 		}
 	}()
 
+	startDropbear()
+
 	envVars := parseEnvFromDisk()
 	if len(envVars) == 0 {
 		envVars = parseEnvFromCmdline()
@@ -500,6 +502,19 @@ func rewriteHosts(r2Host string) {
 		return
 	}
 	log.Printf("[umut-init] rewriteHosts: %s → 127.0.0.1", r2Host)
+}
+
+func startDropbear() {
+	if !fileExists("/usr/sbin/dropbear") {
+		return
+	}
+	log.Println("[umut-init] Starting dropbear SSH on port 22")
+	dropbearCmd := exec.Command("/usr/sbin/dropbear", "-F", "-E", "-p", "22")
+	dropbearCmd.Stdout = os.Stdout
+	dropbearCmd.Stderr = os.Stderr
+	if err := dropbearCmd.Start(); err != nil {
+		log.Printf("[umut-init] dropbear failed to start: %v", err)
+	}
 }
 
 func runEntrypoint(extraEnv []string) {
