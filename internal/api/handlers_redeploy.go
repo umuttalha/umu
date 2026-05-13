@@ -228,21 +228,10 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, name stri
 		return
 	}
 
-	project, exists := s.store.Get(name)
-	if !exists {
-		writeError(w, http.StatusNotFound, "project not found")
+	if err := s.freezeProject(name); err != nil {
+		writeError(w, http.StatusBadRequest, "freeze: "+err.Error())
 		return
 	}
-
-	for _, svc := range project.Services {
-		if svc.PID > 0 {
-			compute.StopVMByPID(svc.PID, svc.SocketPath)
-			svc.PID = 0
-		}
-	}
-
-	project.Status = state.StatusStopped
-	s.store.Save(project)
 
 	s.handleUnfreeze(w, r, name)
 }

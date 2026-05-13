@@ -454,6 +454,10 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		guestIP := network.AllocateGuestIP(projectIndex, i)
 		mac := network.GenerateMAC(projectIndex, i)
 
+		tapName := fmt.Sprintf("tap-%s-%s", req.Name, sCfg.Name)
+		network.DestroyTAP(tapName)
+		network.CreateVMTAP(tapName)
+
 		svcState := &state.Service{
 			Name:         sCfg.Name,
 			VCPUs:        sCfg.VCPUs,
@@ -475,7 +479,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 			extraDrives = append(extraDrives, userDataDisk)
 		}
 
-		vmCfg := compute.DefaultConfig(fmt.Sprintf("%s-%s", req.Name, sCfg.Name), diskPath, "tap-"+req.Name, guestIP, mac)
+		vmCfg := compute.DefaultConfig(fmt.Sprintf("%s-%s", req.Name, sCfg.Name), diskPath, tapName, guestIP, mac)
 		vmCfg.VCPUs = sCfg.VCPUs
 		vmCfg.MemoryMB = sCfg.MemoryMB
 		vmCfg.RootReadOnly = rootReadOnly
@@ -528,42 +532,10 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) destroyProject(w http.ResponseWriter, r *http.Request, name string) {
-	project, exists := s.store.Get(name)
-	if !exists {
-		writeError(w, http.StatusNotFound, "project not found")
+	if err := s.destroyProjectByName(name); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-
-	for _, svc := range project.Services {
-		if svc.PID > 0 {
-			compute.StopVMByPID(svc.PID, svc.SocketPath)
-		}
-		if svc.Expose {
-			routeHostname := proj.RouteHostname(name, svc.Name)
-			routing.RemoveRoute(routeHostname)
-		}
-		if svc.UserDataDisk != "" {
-			udName := strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4")
-			if !storage.IsSharedBaseImage(udName) {
-				storage.DeleteUserDataDisk(udName)
-			}
-		}
-		// Delete per-project root disk. Never delete shared read-only base images.
-		if svc.DiskPath != "" && !svc.RootReadOnly {
-			diskName := strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4")
-			if !storage.IsSharedBaseImage(diskName) {
-				storage.DeleteDisk(diskName)
-			}
-		}
-	}
-
-	s.store.Delete(name)
-	s.secrets.DeleteFile(name)
-
-	if s.audit != nil {
-		s.audit.DestroySuccess(name, "api")
-	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "destroyed"})
 }
 
