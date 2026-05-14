@@ -1,5 +1,7 @@
 # Binaries
 umut
+umut-init
+dns-local
 *.exe
 
 # Go
@@ -27,7 +29,12 @@ Thumbs.db
 dist/
 cmd-test
 scaletozero-test
-umut-init
-umut-init-linux-amd64
+
+# Cross-compiled binaries
 umut-linux
 umut-linux-amd64
+umut-init-linux
+umut-init-linux-amd64
+
+# Test artifacts
+e2e_test.sh

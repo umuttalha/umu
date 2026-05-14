@@ -29,7 +29,7 @@ func initImagesDir() {
 
 const (
 	BaseImageName      = "base.ext4"
-	UserDataDiskSizeMB = 100
+	UserDataDiskSizeMB = 1024
 )
 
 // GetSharedRootImage returns the path to the shared read-only base image for the given runtime.
@@ -256,11 +256,22 @@ func InjectSourceIntoDisk(diskPath, sourceDir string) error {
 	}
 	defer exec.Command("umount", mountDir).Run()
 
-	// Copy all files from source directory to the disk root
-	// Use cp -r to copy recursively
-	cmd := exec.Command("cp", "-r", sourceDir+"/.", mountDir+"/")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("copy source: %s: %w", string(out), err)
+	// Copy all files from source directory to the disk root.
+	// Use rsync if available (excludes heavy dirs), otherwise fall back to cp.
+	if _, lookErr := exec.LookPath("rsync"); lookErr == nil {
+		cmd := exec.Command("rsync", "-a", "--exclude=.git", "--exclude=node_modules",
+			"--exclude=__pycache__", "--exclude=.cache", "--exclude=target",
+			"--exclude=venv", "--exclude=.venv", "--exclude=vendor",
+			"--exclude=go.sum", "--exclude=*.ext4", "--exclude=*.test",
+			sourceDir+"/", mountDir+"/")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("copy source (rsync): %s: %w", string(out), err)
+		}
+	} else {
+		cmd := exec.Command("cp", "-r", sourceDir+"/"+".", mountDir+"/")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("copy source: %s: %w", string(out), err)
+		}
 	}
 
 	return nil

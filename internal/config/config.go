@@ -23,8 +23,8 @@ var runtimeDefaults = map[string]struct {
 	VCPUs  int
 	Memory int
 }{
-	"python":   {Port: 8080, VCPUs: 1, Memory: 256},
-	"deno":     {Port: 8080, VCPUs: 1, Memory: 256},
+	"python":   {Port: 8080, VCPUs: 2, Memory: 1024},
+	"deno":     {Port: 8080, VCPUs: 2, Memory: 1024},
 	"quickwit": {Port: 7280, VCPUs: 2, Memory: 1024},
 }
 
@@ -39,14 +39,14 @@ func RuntimeDefaultVCPUs(runtime string) int {
 	if d, ok := runtimeDefaults[runtime]; ok {
 		return d.VCPUs
 	}
-	return 1
+	return 2
 }
 
 func RuntimeDefaultMemory(runtime string) int {
 	if d, ok := runtimeDefaults[runtime]; ok {
 		return d.Memory
 	}
-	return 256
+	return 1024
 }
 
 // S3Config holds global S3 credentials for managed Quickwit instances.
@@ -131,8 +131,8 @@ func Default() UmutConfig {
 				Name:     "main",
 				BuildDir: "./",
 				Expose:   true,
-				VCPUs:    1,
-				MemoryMB: 256,
+				VCPUs:    2,
+				MemoryMB: 1024,
 				Mode:     "server",
 				AlwaysOn: false,
 			},
@@ -262,7 +262,7 @@ func validateVolumePaths(volumes []string) error {
 		}
 		safe := false
 		for _, prefix := range safeMountPrefixes {
-			if strings.HasPrefix(cleaned, prefix) && cleaned != prefix[:len(prefix)-1] {
+			if strings.HasPrefix(cleaned+"/", prefix) {
 				safe = true
 				break
 			}

@@ -74,7 +74,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 				svc := services[i]
 				tapName := svc.TAPDevice
 				if tapName == "" {
-					tapName = fmt.Sprintf("tap-%s-%s", projectName, svc.Name)
+					tapName = network.TapName(projectName, svc.Name, 0)
 					svc.TAPDevice = tapName
 				}
 				network.DestroyTAP(tapName)
@@ -105,7 +105,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 		vmName := fmt.Sprintf("%s-%s", projectName, svc.Name)
 		tapName := svc.TAPDevice
 		if tapName == "" {
-			tapName = fmt.Sprintf("tap-%s", vmName)
+			tapName = network.TapName(projectName, svc.Name, 0)
 			svc.TAPDevice = tapName
 		}
 
@@ -152,38 +152,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 		fmt.Printf(" done\n")
 	}
 
-	// --- Phase 4: Parallel health checks ---
-	hpath := health.HealthPathForRuntime(project.Runtime)
-	if len(services) > 1 {
-		g := new(errgroup.Group)
-		for i := range services {
-			i := i
-			if !services[i].Expose {
-				continue
-			}
-			g.Go(func() error {
-				return health.CheckWithPath(services[i].GuestIP, services[i].ServicePort, hpath, 5*time.Second, 100*time.Millisecond)
-			})
-		}
-		if err := g.Wait(); err != nil {
-			fmt.Printf("  warning: health check: %v\n", err)
-		} else {
-			fmt.Println("  ● Health checks: OK")
-		}
-	} else {
-		for _, svc := range services {
-			if svc.Expose {
-				fmt.Printf("  ● Waiting for VM to boot...")
-				if err := health.CheckWithPath(svc.GuestIP, svc.ServicePort, hpath, 5*time.Second, 100*time.Millisecond); err != nil {
-					fmt.Printf(" warning: %v\n", err)
-				} else {
-					fmt.Printf(" done\n")
-				}
-			}
-		}
-	}
-
-	// --- Phase 5: Serial route configuration ---
+	// --- Phase 4: Configure proxy routes (do NOT wait for health check) ---
 	for _, svc := range services {
 		if svc.Expose {
 			fmt.Printf("  ● Configuring proxy...")
@@ -198,6 +167,40 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 				}
 			}
 			fmt.Printf(" exposed at %s\n", routeHostname)
+		}
+	}
+
+	// --- Phase 5: Async health checks (non-blocking) ---
+	hpath := health.HealthPathForRuntime(project.Runtime)
+	if len(services) > 1 {
+		g := new(errgroup.Group)
+		for i := range services {
+			i := i
+			if !services[i].Expose {
+				continue
+			}
+			g.Go(func() error {
+				return health.CheckWithPath(services[i].GuestIP, services[i].ServicePort, hpath, 5*time.Second, 100*time.Millisecond)
+			})
+		}
+		go func() {
+			if err := g.Wait(); err != nil {
+				fmt.Printf("  warning: health check: %v\n", err)
+			} else {
+				fmt.Println("  ● Health checks: OK")
+			}
+		}()
+	} else {
+		for _, svc := range services {
+			if svc.Expose {
+				go func(svc *state.Service) {
+					if err := health.CheckWithPath(svc.GuestIP, svc.ServicePort, hpath, 5*time.Second, 100*time.Millisecond); err != nil {
+						fmt.Printf("  health check: warning: %v\n", err)
+					} else {
+						fmt.Printf("  ● Health check: OK\n")
+					}
+				}(svc)
+			}
 		}
 	}
 

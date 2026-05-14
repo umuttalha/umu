@@ -441,6 +441,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "create user data disk: "+err.Error())
 				return
 			}
+			storage.InjectInit(userDataDisk)
 		} else {
 			diskPath, err = storage.CloneDisk(fmt.Sprintf("%s-%s", req.Name, sCfg.Name))
 			if err != nil {
@@ -458,7 +459,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		guestIP := network.AllocateGuestIP(projectIndex, i)
 		mac := network.GenerateMAC(projectIndex, i)
 
-		tapName := fmt.Sprintf("tap-%s-%s", req.Name, sCfg.Name)
+		tapName := network.TapName(req.Name, sCfg.Name, 0)
 		network.DestroyTAP(tapName)
 		network.CreateVMTAP(tapName)
 
@@ -538,6 +539,9 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 
 		kernelArgs, _ := compute.BuildKernelArgs(vmCfg)
 		svcState.KernelArgs = kernelArgs
+		if rootReadOnly && userDataDisk != "" {
+			svcState.KernelArgs += " init=" + compute.UserDataMount + "/sbin/init"
+		}
 
 		vm, err := compute.StartVM(vmCfg)
 		if err != nil {

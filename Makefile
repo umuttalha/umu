@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X '$(MODULE)/cmd.Commit=$(COMMIT)' \
 	-X '$(MODULE)/cmd.BuildDate=$(BUILD_DATE)'
 
-.PHONY: build build-init build-dns-local install clean vet test deploy build-quickwit-base rebuild-quickwit-base-server
+.PHONY: build build-init build-dns-local install clean vet test deploy build-quickwit-base rebuild-quickwit-base-server e2e-test
 
 SERVER ?= root@localhost
 # Set SERVER explicitly: make deploy SERVER=root@your-server-ip
@@ -52,3 +52,8 @@ rebuild-quickwit-base-server:
 	scp install.sh $(SERVER):/tmp/umut-rebuild.sh
 	ssh $(SERVER) "rm -f /var/lib/umut/images/quickwit-base.ext4 /var/lib/umut/checksums/quickwit-base.ext4.sha256 && bash /tmp/umut-rebuild.sh && rm -f /tmp/umut-rebuild.sh"
 	@echo "✓ quickwit-base.ext4 rebuilt on $(SERVER)"
+
+## Run E2E tests on remote server (requires SERVER=root@your-server).
+e2e-test: deploy
+	scp e2e_test.sh $(SERVER):/tmp/e2e_test.sh
+	ssh $(SERVER) "bash /tmp/e2e_test.sh"

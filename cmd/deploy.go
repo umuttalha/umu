@@ -85,6 +85,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	// Resolve service port: CLI flag takes precedence, else use runtime default
 	servicePort := deployPort
 	if servicePort == 0 {
+		if len(cfg.Services) == 0 {
+			return fmt.Errorf("no services defined in umut.toml")
+		}
 		servicePort = config.RuntimeDefaultPort(cfg.Services[0].Runtime)
 	}
 
@@ -138,7 +141,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			sCfg:    cfg.Services[i],
 			guestIP: network.AllocateGuestIP(projectIndex, i),
 			mac:     network.GenerateMAC(projectIndex, i),
-			tapName: fmt.Sprintf("tap-%s-%s", projectName, cfg.Services[i].Name),
+			tapName: network.TapName(projectName, cfg.Services[i].Name, 0),
 		}
 	}
 
@@ -227,6 +230,10 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			st.diskPath = storage.GetSharedRootImage(sCfg.Runtime)
 			st.rootReadOnly = true
 			st.userDataDisk = dataDiskPath
+
+			if err := storage.InjectInit(dataDiskPath); err != nil {
+				fmt.Printf("\n  warning: failed to inject init: %v\n", err)
+			}
 
 			if err := storage.InjectSourceIntoDisk(dataDiskPath, serviceDir); err != nil {
 				fmt.Printf("\n  warning: failed to inject source code: %v\n", err)
@@ -510,6 +517,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		if kerr != nil {
 			return fmt.Errorf("kernel args too long for service %s: %w", sCfg.Name, kerr)
 		}
+		if st.rootReadOnly && st.userDataDisk != "" {
+			svcState.KernelArgs += " init=" + compute.UserDataMount + "/sbin/init"
+		}
 
 		// Register metadata with HTTP registry before starting VM
 		metadata.EnsureRunning()
@@ -529,39 +539,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		states[i].svcState = svcState
 	}
 
-	// --- Phase 4: Parallel health checks ---
-	if len(plans) > 1 {
-		g := new(errgroup.Group)
-		for i := range plans {
-			i := i
-			if !plans[i].sCfg.Expose {
-				continue
-			}
-			g.Go(func() error {
-				path := health.HealthPathForRuntime(plans[i].sCfg.Runtime)
-				return health.CheckWithPath(plans[i].guestIP, servicePort, path, 30*time.Second, 100*time.Millisecond)
-			})
-		}
-		if err := g.Wait(); err != nil {
-			fmt.Printf("  warning: health check: %v\n", err)
-		} else {
-			fmt.Println("  ● Health checks: OK")
-		}
-	} else {
-		for i := range plans {
-			if plans[i].sCfg.Expose {
-				path := health.HealthPathForRuntime(plans[i].sCfg.Runtime)
-				fmt.Printf("  ● Waiting for VM to boot...")
-				if err := health.CheckWithPath(plans[i].guestIP, servicePort, path, 30*time.Second, 100*time.Millisecond); err != nil {
-					fmt.Printf(" warning: %v\n", err)
-				} else {
-					fmt.Printf(" done\n")
-				}
-			}
-		}
-	}
-
-	// --- Phase 5: Serial route configuration ---
+	// --- Phase 4: Serial route configuration (do NOT wait for health check) ---
 	for i := range plans {
 		svcState := states[i].svcState
 		if svcState == nil {
@@ -584,6 +562,42 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 
 		project.Services = append(project.Services, svcState)
+	}
+
+	// --- Phase 5: Async health checks (non-blocking) ---
+	if len(plans) > 1 {
+		g := new(errgroup.Group)
+		for i := range plans {
+			i := i
+			if !plans[i].sCfg.Expose {
+				continue
+			}
+			g.Go(func() error {
+				path := health.HealthPathForRuntime(plans[i].sCfg.Runtime)
+				return health.CheckWithPath(plans[i].guestIP, servicePort, path, 30*time.Second, 100*time.Millisecond)
+			})
+		}
+		go func() {
+			if err := g.Wait(); err != nil {
+				fmt.Printf("  warning: health check: %v\n", err)
+			} else {
+				fmt.Println("  ● Health checks: OK")
+			}
+		}()
+	} else {
+		for i := range plans {
+			if plans[i].sCfg.Expose {
+				i := i
+				go func() {
+					path := health.HealthPathForRuntime(plans[i].sCfg.Runtime)
+					if err := health.CheckWithPath(plans[i].guestIP, servicePort, path, 30*time.Second, 100*time.Millisecond); err != nil {
+						fmt.Printf("  health check: warning: %v\n", err)
+					} else {
+						fmt.Printf("  ● Health check: OK\n")
+					}
+				}()
+			}
+		}
 	}
 
 	// Save final state
@@ -669,7 +683,7 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 		// Allocate IP/MAC and create TAP while state disk is being created
 		guestIP := network.AllocateGuestIP(projectIndex, newVersion*10+i)
 		mac := network.GenerateMAC(projectIndex, newVersion*10+i)
-		tapName := fmt.Sprintf("tap-%s-%s-v%d", existing.Name, sCfg.Name, newVersion)
+		tapName := network.TapName(existing.Name, sCfg.Name, newVersion)
 
 		fmt.Printf("  ● Setting up network...")
 		network.DestroyTAP(tapName)
@@ -823,6 +837,9 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 		kernelArgs, kerr := compute.BuildKernelArgs(vmCfg)
 		if kerr != nil {
 			return fmt.Errorf("kernel args too long for service %s: %w", sCfg.Name, kerr)
+		}
+		if rootReadOnly && userDataDisk != "" {
+			kernelArgs += " init=" + compute.UserDataMount + "/sbin/init"
 		}
 
 		// Register metadata with HTTP registry before starting VM

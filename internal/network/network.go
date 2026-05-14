@@ -167,3 +167,48 @@ func run(name string, args ...string) error {
 	}
 	return nil
 }
+
+// TapName generates a Linux-compatible TAP interface name (max 15 chars).
+// Linux IFNAMSIZ is 16 (including null), so the name must be <= 15.
+// The "tap-" prefix uses 4 chars, leaving 11 for project-service.
+func TapName(projectName, serviceName string, version int) string {
+	base := fmt.Sprintf("tap-%s-%s", projectName, serviceName)
+	if version > 0 {
+		base = fmt.Sprintf("tap-%s-%s-v%d", projectName, serviceName, version)
+	}
+	if len(base) <= 15 {
+		return base
+	}
+
+	verSuffix := ""
+	if version > 0 {
+		verSuffix = fmt.Sprintf("-v%d", version)
+	}
+
+	svc := serviceName
+	proj := projectName
+
+	// Truncate proportionally: 11 = max for proj+1+svc+verSuffix
+	maxCombined := 15 - len("tap-")                        // 11
+	svcLen := len(svc) + len(verSuffix) + 1                // svc + version + hyphen before svc
+	projLen := maxCombined - svcLen
+	if projLen < 1 {
+		projLen = 1
+		svcLen = maxCombined - projLen - 1 - len(verSuffix)
+		if svcLen < 1 {
+			svcLen = 1
+		}
+	}
+
+	if len(proj) > projLen {
+		proj = proj[:projLen]
+	}
+	if len(svc) > svcLen {
+		svc = svc[:svcLen]
+	}
+
+	if version > 0 {
+		return fmt.Sprintf("tap-%s-%s-v%d", proj, svc, version)
+	}
+	return fmt.Sprintf("tap-%s-%s", proj, svc)
+}

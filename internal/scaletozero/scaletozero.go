@@ -556,3 +556,15 @@ func (s *Service) finishDrain(projectName, serviceName, key string, pid int, soc
 	s.updateProjectStatus(fresh)
 	s.store.Save(fresh)
 }
+
+func extractProjectIndexFromIP(bridgeIP string) int {
+	parts := strings.Split(bridgeIP, ".")
+	if len(parts) != 4 {
+		return -1
+	}
+	var idx int
+	if _, err := fmt.Sscanf(parts[2], "%d", &idx); err != nil {
+		return -1
+	}
+	return idx
+}

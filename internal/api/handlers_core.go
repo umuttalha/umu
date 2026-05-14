@@ -70,7 +70,7 @@ func (s *Server) unfreezeProject(name string) error {
 	for _, svc := range project.Services {
 		tapName := svc.TAPDevice
 		if tapName == "" {
-			tapName = fmt.Sprintf("tap-%s-%s", name, svc.Name)
+			tapName = network.TapName(name, svc.Name, 0)
 			svc.TAPDevice = tapName
 		}
 		network.DestroyTAP(tapName)

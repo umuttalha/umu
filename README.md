@@ -6,6 +6,8 @@
 umut deploy myproject        # boot a multi-VM VPC in seconds
 umut list                     # show all running projects
 umut top --watch              # live CPU/memory per VM (like htop)
+umut exec myproject "ps aux"  # run command inside a running VM
+umut ssh myproject            # interactive SSH into a running VM
 umut freeze myproject         # stop VM, keep data
 umut unfreeze myproject       # resume in <100ms
 umut destroy myproject        # tear down
@@ -16,12 +18,13 @@ umut daemon                   # start scale-to-zero proxy
 
 Transforms a single bare-metal server into a private cloud. Each project runs inside an isolated Firecracker microVM.
 
-- **Multi-runtime**: Python and Deno. Pick the right language for the job.
+- **Multi-runtime**: Python, Deno, and Quickwit. Pick the right tool for the job.
 - **VPC isolation**: Services communicate over private Linux bridge with DNS injection.
 - **Cgroups v2**: CPU, memory, I/O, and PID limits per VM.
 - **Persistent volumes**: Attach stateful block devices that survive deploys.
 - **Scale-to-zero**: Idle VMs freeze after 5 min, wake in <700ms.
 - **Ephemeral mode**: VMs auto-detected as ephemeral when `always_on = false` with no volumes — no persistent disk waste.
+- **VM access**: `umut exec` for one-shot commands, `umut ssh` for interactive shells — both over private bridge, zero public exposure.
 
 **No Docker. No Kubernetes.** Just Go + Firecracker + Caddy.
 
@@ -147,11 +150,12 @@ System paths (`/srv/jailer`, `/usr/local/bin/firecracker`, `/mnt/storagebox`) st
 | Command | Description |
 |---------|-------------|
 | `umut deploy <name>` | Deploy a project into a microVM |
-| `umut run <name>` | One-shot function execution with timeout |
 | `umut list` | List all projects and services |
 | `umut top` | CPU/memory usage per VM (`--watch` for live, `--json` for scripts) |
 | `umut status <name>` | Detailed bridge, IP, and VM info |
 | `umut logs <name>:<svc>` | Tail VM console logs |
+| `umut exec <name> <cmd>` | Run a one-shot command inside a running VM |
+| `umut ssh <name>` | Interactive SSH session into a running VM |
 | `umut freeze <name>` | Stop VM, preserve data |
 | `umut unfreeze <name>` | Resume frozen VM |
 | `umut destroy <name>` | Tear down and release resources |
