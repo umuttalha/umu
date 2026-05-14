@@ -164,11 +164,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		hostsString = appendResolvedHosts(hostsString, "https://telemetry.quickwit.io")
 	}
 
-	// Pre-check Storage Box availability
-	useSharedRoot := storage.SharedRootExists(cfg.Services[0].Runtime)
-	storageBoxAvailable := storage.IsStorageBoxAvailable()
-
-	// Validate pip dependencies against shared base manifest (per-service)
+// Validate pip dependencies against shared base manifest (per-service)
 	for _, sCfg := range cfg.Services {
 		if !storage.SharedRootExists(sCfg.Runtime) {
 			continue
@@ -192,7 +188,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		diskPath     string
 		rootReadOnly bool
 		userDataDisk string
-		stateDisk    string
 		volumes      []string
 		mergedEnv    map[string]string
 		svcState     *state.Service
@@ -201,31 +196,24 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	states := make([]deployState, len(plans))
 
-	setupServiceDisk := func(p servicePlan, stateDiskPath string, stateDiskErr error) deployState {
+	setupServiceDisk := func(p servicePlan) deployState {
 		sCfg := p.sCfg
 		serviceDir := filepath.Join(cwd, sCfg.BuildDir)
 		st := deployState{}
 
-		ephemeral := !sCfg.AlwaysOn && len(sCfg.Volumes) == 0
-
 		if storage.SharedRootExists(sCfg.Runtime) {
 			var dataDiskPath string
 
-			if sCfg.Storage != "local" && storageBoxAvailable && stateDiskErr == nil && sCfg.Runtime != "quickwit" && sCfg.Runtime != "sqlite" {
-				dataDiskPath = stateDiskPath
-				st.stateDisk = stateDiskPath
+			dataDiskName := fmt.Sprintf("data-%s-%s", projectName, sCfg.Name)
+			var err error
+			if deploySkipDiskCheck {
+				dataDiskPath, err = storage.CreateUserDataDiskSkipCheck(dataDiskName, sCfg.PreallocatedVolumes)
 			} else {
-				dataDiskName := fmt.Sprintf("data-%s-%s", projectName, sCfg.Name)
-				var err error
-				if deploySkipDiskCheck {
-					dataDiskPath, err = storage.CreateUserDataDiskSkipCheck(dataDiskName, sCfg.PreallocatedVolumes)
-				} else {
-					dataDiskPath, err = storage.CreateUserDataDisk(dataDiskName, sCfg.PreallocatedVolumes)
-				}
-				if err != nil {
-					st.err = fmt.Errorf("create data disk: %w", err)
-					return st
-				}
+				dataDiskPath, err = storage.CreateUserDataDisk(dataDiskName, sCfg.PreallocatedVolumes)
+			}
+			if err != nil {
+				st.err = fmt.Errorf("create data disk: %w", err)
+				return st
 			}
 			st.diskPath = storage.GetSharedRootImage(sCfg.Runtime)
 			st.rootReadOnly = true
@@ -239,14 +227,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 				fmt.Printf("\n  warning: failed to inject source code: %v\n", err)
 			}
 
-			// For ephemeral VMs: save source to Storage Box state disk for restore on unfreeze
-			if sCfg.Storage != "local" && ephemeral && storageBoxAvailable && st.stateDisk == "" {
-				statePath, err := storage.CreateStateDisk(projectName, sCfg.Name)
-				if err == nil {
-					storage.InjectSourceIntoDisk(statePath, serviceDir)
-					st.stateDisk = statePath
-				}
-			}
 		} else {
 			var err error
 			st.diskPath, err = storage.CloneDisk(fmt.Sprintf("%s-%s", projectName, sCfg.Name))
@@ -269,15 +249,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 				fmt.Printf("\n  warning: SSH host key generation failed: %v\n", err)
 			}
 			injectSSHAuthorizedKeys(st.diskPath)
-
-			// For ephemeral VMs in full-clone mode: save source to Storage Box for restore
-			if sCfg.Storage != "local" && ephemeral && storageBoxAvailable {
-				statePath, err := storage.CreateStateDisk(projectName, sCfg.Name)
-				if err == nil {
-					storage.InjectSourceIntoDisk(statePath, serviceDir)
-					st.stateDisk = statePath
-				}
-			}
 		}
 
 		mergedEnv, err := MergeEnv(projectName, sCfg.Env)
@@ -348,35 +319,15 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		i := 0
 		sCfg := plans[i].sCfg
 
-		stateDiskStarted := false
-		var stateDiskPath string
-		var stateDiskErr error
-		stateDiskDone := make(chan struct{})
-
-		if useSharedRoot && sCfg.Storage != "local" {
-			stateDiskStarted = true
-			go func() {
-				defer close(stateDiskDone)
-				stateDiskPath, stateDiskErr = storage.CreateStateDisk(projectName, sCfg.Name)
-			}()
-		}
-
 		fmt.Printf("\n  [Service: %s]\n", sCfg.Name)
 		fmt.Printf("  ● Setting up network...")
 		network.DestroyTAP(plans[i].tapName)
 		if _, err := network.CreateVMTAP(plans[i].tapName); err != nil {
-			if stateDiskStarted {
-				<-stateDiskDone
-			}
 			return fmt.Errorf("create tap: %w", err)
 		}
 		fmt.Printf(" done (%s)\n", plans[i].guestIP)
 
-		if stateDiskStarted {
-			<-stateDiskDone
-		}
-
-		states[i] = setupServiceDisk(plans[i], stateDiskPath, stateDiskErr)
+		states[i] = setupServiceDisk(plans[i])
 	} else {
 		fmt.Printf("  ● Setting up network and storage for %d services in parallel...\n", len(plans))
 		g := new(errgroup.Group)
@@ -385,32 +336,12 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			g.Go(func() error {
 				sCfg := plans[i].sCfg
 
-				stateDiskStarted := false
-				var stateDiskPath string
-				var stateDiskErr error
-				stateDiskDone := make(chan struct{})
-
-				if useSharedRoot && sCfg.Storage != "local" {
-					stateDiskStarted = true
-					go func() {
-						defer close(stateDiskDone)
-						stateDiskPath, stateDiskErr = storage.CreateStateDisk(projectName, sCfg.Name)
-					}()
-				}
-
 				network.DestroyTAP(plans[i].tapName)
 				if _, err := network.CreateVMTAP(plans[i].tapName); err != nil {
-					if stateDiskStarted {
-						<-stateDiskDone
-					}
 					return fmt.Errorf("service %s: create tap: %w", sCfg.Name, err)
 				}
 
-				if stateDiskStarted {
-					<-stateDiskDone
-				}
-
-				states[i] = setupServiceDisk(plans[i], stateDiskPath, stateDiskErr)
+				states[i] = setupServiceDisk(plans[i])
 				if states[i].err != nil {
 					return fmt.Errorf("service %s: %w", sCfg.Name, states[i].err)
 				}
@@ -458,7 +389,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			DiskPath:     st.diskPath,
 			RootReadOnly: st.rootReadOnly,
 			UserDataDisk: st.userDataDisk,
-			StateDisk:    st.stateDisk,
 		}
 
 		fmt.Printf("  ● Starting microVM (cpus=%d, mem=%dMB)...", sCfg.VCPUs, sCfg.MemoryMB)
@@ -661,23 +591,8 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 		var err error
 		var rootReadOnly bool
 		var userDataDisk string
-		var stateDisk string
 
-		// Pre-start state disk creation to overlap with TAP setup
-		stateDiskStarted := false
-		var stateDiskPath string
-		var stateDiskErr error
-		stateDiskDone := make(chan struct{})
-
-		if sCfg.Storage != "local" && storage.SharedRootExists(sCfg.Runtime) {
-			stateDiskStarted = true
-			go func() {
-				defer close(stateDiskDone)
-				stateDiskPath, stateDiskErr = storage.CreateStateDisk(existing.Name, sCfg.Name)
-			}()
-		}
-
-		// Allocate IP/MAC and create TAP while state disk is being created
+		// Allocate IP/MAC and create TAP
 		guestIP := network.AllocateGuestIP(projectIndex, newVersion*10+i)
 		mac := network.GenerateMAC(projectIndex, newVersion*10+i)
 		tapName := network.TapName(existing.Name, sCfg.Name, newVersion)
@@ -685,17 +600,9 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 		fmt.Printf("  ● Setting up network...")
 		network.DestroyTAP(tapName)
 		if _, err := network.CreateVMTAP(tapName); err != nil {
-			if stateDiskStarted {
-				<-stateDiskDone
-			}
 			return fmt.Errorf("create tap: %w", err)
 		}
 		fmt.Printf(" done (%s)\n", guestIP)
-
-		// Wait for state disk to finish
-		if stateDiskStarted {
-			<-stateDiskDone
-		}
 
 		if storage.SharedRootExists(sCfg.Runtime) {
 			var dataDiskPath string
@@ -708,17 +615,11 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 			diskPath = sharedRootPath
 			rootReadOnly = true
 
-			if sCfg.Storage != "local" && stateDiskErr == nil && storage.IsStorageBoxAvailable() {
-				dataDiskPath = stateDiskPath
-				stateDisk = stateDiskPath
-				fmt.Printf("\n  ● Attached persistent state disk from Storage Box")
+			dataDiskName := fmt.Sprintf("data-%s", versionedName)
+			if deploySkipDiskCheck {
+				dataDiskPath, err = storage.CreateUserDataDiskSkipCheck(dataDiskName, sCfg.PreallocatedVolumes)
 			} else {
-				dataDiskName := fmt.Sprintf("data-%s", versionedName)
-				if deploySkipDiskCheck {
-					dataDiskPath, err = storage.CreateUserDataDiskSkipCheck(dataDiskName, sCfg.PreallocatedVolumes)
-				} else {
-					dataDiskPath, err = storage.CreateUserDataDisk(dataDiskName, sCfg.PreallocatedVolumes)
-				}
+				dataDiskPath, err = storage.CreateUserDataDisk(dataDiskName, sCfg.PreallocatedVolumes)
 			}
 			if err != nil {
 				return fmt.Errorf("create data disk: %w", err)
@@ -896,8 +797,7 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 			}
 
 			// Clean up old disks. Skip shared root images (only delete per-VM disks).
-			// Never delete state disks on Storage Box — they persist across updates.
-			if oldSvc.UserDataDisk != "" && oldSvc.StateDisk == "" {
+			if oldSvc.UserDataDisk != "" {
 				storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(oldSvc.UserDataDisk), ".ext4"))
 			}
 			if oldSvc.DiskPath != "" && !oldSvc.RootReadOnly {
@@ -920,7 +820,6 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 			Version:      newVersion,
 			DiskPath:     diskPath,
 			UserDataDisk: userDataDisk,
-			StateDisk:    stateDisk,
 			RootReadOnly: rootReadOnly,
 			TAPDevice:    tapName,
 			GuestIP:      guestIP,

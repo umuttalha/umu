@@ -109,13 +109,6 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 				projectName, svc.Name, svc.DiskPath, svc.RootReadOnly, svc.UserDataDisk)
 			fmt.Printf("  ● Cleaning up disk images...")
 
-			// Delete persistent state disk (Storage Box)
-			if svc.StateDisk != "" {
-				if err := storage.DeleteStateDisk(projectName, svc.Name); err != nil {
-					fmt.Printf("\n  warning: failed to delete state disk: %v", err)
-				}
-			}
-
 			// Delete per-user data disk (shared root mode, ephemeral)
 			if svc.UserDataDisk != "" {
 				userDataName := strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4")

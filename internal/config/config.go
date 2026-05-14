@@ -211,8 +211,8 @@ func Load(dir string) (UmutConfig, error) {
 			if s.Mode != "server" && s.Mode != "function" {
 				return cfg, fmt.Errorf("service %q: invalid mode %q (must be 'server' or 'function')", s.Name, s.Mode)
 			}
-			if s.Storage != "" && s.Storage != "local" && s.Storage != "storagebox" {
-				return cfg, fmt.Errorf("service %q: invalid storage %q (must be 'local' or 'storagebox')", s.Name, s.Storage)
+			if s.Storage != "" && s.Storage != "local" {
+				return cfg, fmt.Errorf("service %q: invalid storage %q (must be 'local')", s.Name, s.Storage)
 			}
 			// Auto-detect runtime from build_dir files only when no runtime was
 			// explicitly set anywhere (top level or any service). This prevents

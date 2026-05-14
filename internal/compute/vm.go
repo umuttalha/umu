@@ -29,117 +29,11 @@ func init() {
 	log.SetOutput(io.Discard)
 }
 
-const storageBoxPrefix = "/mnt/storagebox/"
-
-// RunningVM holds references to a running Firecracker VM.
 type RunningVM struct {
 	Machine *firecracker.Machine
 	Config  VMConfig
 	PID     int
-	Cancel  context.CancelFunc
-}
-
-func isStorageBoxDrive(path string) bool {
-	return strings.HasPrefix(path, storageBoxPrefix)
-}
-
-// storageBoxLinkFilesHandler creates a replacement for the SDK's LinkFilesToRootFS
-// handler that supports Storage Box drives. The SDK's default handler hard-links
-// all drive files into the jailer chroot, which fails on CIFS mounts (cross-device,
-// no hard link support). This handler bind-mounts only the specific project
-// directories needed — not the entire /mnt/storagebox — to prevent cross-project
-// data access from inside a compromised VM.
-func storageBoxLinkFilesHandler(projectName string) firecracker.Handler {
-	return firecracker.Handler{
-		Name: "fcinit.LinkFilesToRootFS",
-		Fn: func(ctx context.Context, m *firecracker.Machine) error {
-			rootfs := filepath.Join(
-				JailerBaseDir,
-				"firecracker",
-				projectName,
-				"root",
-			)
-
-			kernelFileName := filepath.Base(m.Cfg.KernelImagePath)
-			kernelDst := filepath.Join(rootfs, kernelFileName)
-			if err := os.Link(m.Cfg.KernelImagePath, kernelDst); err != nil {
-				return fmt.Errorf("link kernel: %w", err)
-			}
-			m.Cfg.KernelImagePath = kernelFileName
-
-			if m.Cfg.InitrdPath != "" {
-				initrdFileName := filepath.Base(m.Cfg.InitrdPath)
-				initrdDst := filepath.Join(rootfs, initrdFileName)
-				if err := os.Link(m.Cfg.InitrdPath, initrdDst); err != nil {
-					return fmt.Errorf("link initrd: %w", err)
-				}
-				m.Cfg.InitrdPath = initrdFileName
-			}
-
-			// Collect unique project directories from storage box drive paths.
-			// Path format: /mnt/storagebox/projects/<project>/<service>/<file>
-			// We bind-mount only each project's subdirectory to isolate VMs.
-			sbProjectDirs := make(map[string]bool)
-			for i, drive := range m.Cfg.Drives {
-				hostPath := firecracker.StringValue(drive.PathOnHost)
-				if isStorageBoxDrive(hostPath) {
-					sbProjectDirs[storageBoxProjectDir(hostPath)] = true
-					m.Cfg.Drives[i].PathOnHost = firecracker.String(hostPath)
-				} else {
-					driveFileName := filepath.Base(hostPath)
-					driveDst := filepath.Join(rootfs, driveFileName)
-					if err := os.Link(hostPath, driveDst); err != nil {
-						return fmt.Errorf("link drive %s: %w", hostPath, err)
-					}
-					m.Cfg.Drives[i].PathOnHost = firecracker.String(driveFileName)
-				}
-			}
-
-			// Bind-mount each project directory individually into the chroot.
-			// This ensures the VM can only access its own project's files.
-			for projDir := range sbProjectDirs {
-				dstPath := filepath.Join(rootfs, projDir)
-				if err := os.MkdirAll(dstPath, 0755); err != nil {
-					return fmt.Errorf("create storage box dir in chroot: %w", err)
-				}
-				if err := syscall.Mount(projDir, dstPath, "", syscall.MS_BIND, ""); err != nil {
-					return fmt.Errorf("bind mount storage box project %s: %w", projDir, err)
-				}
-			}
-			return nil
-		},
-	}
-}
-
-// storageBoxProjectDir extracts the project directory from a storage box drive path.
-// E.g. "/mnt/storagebox/projects/sb2/main/state.ext4" → "/mnt/storagebox/projects/sb2"
-// Falls back to "/mnt/storagebox" if the path doesn't follow the expected pattern.
-func storageBoxProjectDir(drivePath string) string {
-	// Path format: /mnt/storagebox/projects/<project>/<service>/<file>
-	parts := strings.Split(
-		strings.TrimPrefix(drivePath, "/mnt/storagebox/projects/"),
-		"/",
-	)
-	if len(parts) > 0 && parts[0] != "" {
-		return "/mnt/storagebox/projects/" + parts[0]
-	}
-	return "/mnt/storagebox"
-}
-
-// unmountStorageBoxProjects unmounts all bind-mounted storage box project
-// directories under a jailer rootfs. The bind mounts are at
-// <rootfs>/mnt/storagebox/projects/<project>.
-func unmountStorageBoxProjects(rootfs string) {
-	projectsDir := filepath.Join(rootfs, "mnt", "storagebox", "projects")
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			syscall.Unmount(filepath.Join(projectsDir, entry.Name()), syscall.MNT_DETACH)
-		}
-	}
+Cancel  context.CancelFunc
 }
 
 // StartVM launches a Firecracker microVM inside a jailer sandbox.
@@ -148,8 +42,6 @@ func StartVM(cfg VMConfig) (*RunningVM, error) {
 	jailDir := filepath.Join(JailerBaseDir, "firecracker", cfg.ProjectName)
 
 	if isSafeJailerPath(jailDir) {
-		// Unmount any stale storage box project bind mounts before cleaning
-		unmountStorageBoxProjects(filepath.Join(jailDir, "root"))
 		os.RemoveAll(jailDir)
 	} else {
 		log.Warnf("skipping jailer cleanup: unsafe path %q for project %q", jailDir, cfg.ProjectName)
@@ -250,19 +142,6 @@ func StartVM(cfg VMConfig) (*RunningVM, error) {
 		return nil, fmt.Errorf("create firecracker machine: %w", err)
 	}
 
-	needsStorageBox := isStorageBoxDrive(cfg.RootfsPath)
-	for _, d := range cfg.ExtraDrives {
-		if isStorageBoxDrive(d) {
-			needsStorageBox = true
-			break
-		}
-	}
-	if needsStorageBox {
-		machine.Handlers.FcInit = machine.Handlers.FcInit.Swap(
-			storageBoxLinkFilesHandler(cfg.ProjectName),
-		)
-	}
-
 	// After NewMachine, the SDK has updated SocketPath to the absolute path within the chroot
 	// e.g. /srv/jailer/firecracker/<id>/root/<id>.sock
 	cfg.SocketPath = machine.Cfg.SocketPath
@@ -277,13 +156,6 @@ func StartVM(cfg VMConfig) (*RunningVM, error) {
 	if err := machine.Start(ctx); err != nil {
 		cancel()
 		logFile.Close()
-		// Clean up storage box bind mount and jailer dir on start failure.
-		// The FcInit handler (storageBoxLinkFilesHandler) creates the bind mount
-		// during machine.Start(), and the background cleanup goroutine never runs
-		// when Start fails. Without this, stale CIFS mounts accumulate.
-		if needsStorageBox {
-			unmountStorageBoxProjects(jailerRoot)
-		}
 		if isSafeJailerPath(jailDir) {
 			os.RemoveAll(jailDir)
 		}
@@ -313,10 +185,6 @@ func StartVM(cfg VMConfig) (*RunningVM, error) {
 	go func() {
 		machine.Wait(ctx)
 		logFile.Close()
-
-		// Unmount Storage Box project bind mounts
-		unmountStorageBoxProjects(jailerRoot)
-		// DO NOT os.RemoveAll — the bind mount exposes the real CIFS files
 
 		// Clean up jailer chroot directory for this VM
 		if isSafeJailerPath(jailDir) {
@@ -398,7 +266,6 @@ func StopVMByPID(pid int, socketPath string) error {
 		jailerRoot := filepath.Dir(socketPath)
 		jailDir := filepath.Dir(jailerRoot)
 		if isSafeJailerPath(jailDir) {
-			unmountStorageBoxProjects(jailerRoot)
 			os.RemoveAll(jailDir)
 		} else {
 			log.Warnf("skipping jailer cleanup: unsafe path %q derived from socketPath %q", jailDir, socketPath)
@@ -580,7 +447,6 @@ func RestoreFromSnapshot(cfg VMConfig) (*RunningVM, error) {
 
 	jailDir := filepath.Join(JailerBaseDir, "firecracker", vmName)
 	if isSafeJailerPath(jailDir) {
-		unmountStorageBoxProjects(filepath.Join(jailDir, "root"))
 		os.RemoveAll(jailDir)
 	}
 
@@ -677,19 +543,6 @@ func RestoreFromSnapshot(cfg VMConfig) (*RunningVM, error) {
 		return nil, fmt.Errorf("create firecracker machine for snapshot restore: %w", err)
 	}
 
-	needsStorageBox := isStorageBoxDrive(cfg.RootfsPath)
-	for _, d := range cfg.ExtraDrives {
-		if isStorageBoxDrive(d) {
-			needsStorageBox = true
-			break
-		}
-	}
-	if needsStorageBox {
-		machine.Handlers.FcInit = machine.Handlers.FcInit.Swap(
-			storageBoxLinkFilesHandler(cfg.ProjectName),
-		)
-	}
-
 	// Hard-link snapshot files into the jailer chroot so Firecracker can access them.
 	// The snapshot handler uses relative paths within the chroot.
 	jailerRoot := filepath.Join(JailerBaseDir, "firecracker", cfg.ProjectName, "root")
@@ -727,9 +580,6 @@ func RestoreFromSnapshot(cfg VMConfig) (*RunningVM, error) {
 		os.Remove(stateDst)
 		cancel()
 		logFile.Close()
-		if needsStorageBox {
-			unmountStorageBoxProjects(jailerRoot)
-		}
 		if isSafeJailerPath(jailDir) {
 			os.RemoveAll(jailDir)
 		}
@@ -751,7 +601,6 @@ func RestoreFromSnapshot(cfg VMConfig) (*RunningVM, error) {
 	go func() {
 		machine.Wait(ctx)
 		logFile.Close()
-		unmountStorageBoxProjects(jailerRoot)
 		if isSafeJailerPath(jailDir) {
 			os.RemoveAll(jailDir)
 		}

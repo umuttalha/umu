@@ -21,7 +21,7 @@ var unfreezeCmd = &cobra.Command{
 	Use:   "unfreeze <project-name>",
 	Short: "Resume a frozen project (restart VMs, restore proxy routes)",
 	Long: `Unfreeze restarts the Firecracker microVMs for a previously frozen project.
-All persistent data on Storage Box is preserved and re-attached.
+All persistent data is preserved and re-attached.
 
 Caddy proxy routes are re-added so the project becomes reachable again.
 

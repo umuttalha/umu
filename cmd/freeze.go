@@ -18,7 +18,7 @@ var freezeCmd = &cobra.Command{
 	Use:   "freeze <project-name>",
 	Short: "Freeze a running project (stop VM, keep data, remove from proxy)",
 	Long: `Freeze stops the Firecracker microVMs for a project without deleting any data.
-The project's state disks (on Storage Box) remain intact and can be resumed with 'umut unfreeze'.
+The project's disks remain intact and can be resumed with 'umut unfreeze'.
 
 Caddy proxy routes are removed so the project becomes unreachable.
 

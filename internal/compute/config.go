@@ -122,8 +122,6 @@ const (
 	DefaultVCPUs  = 1
 	DefaultMemoryMB   = 256
 	UserDataMount     = "/workspace"
-	StorageBoxMount   = "/mnt/storagebox"
-	StateDiskSubdir   = "projects"
 
 	DefaultQuickwitPort   = 7280
 	DefaultQuickwitVCPUs  = 2
