@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +11,7 @@ import (
 	"github.com/umuttalha/umut/internal/compute"
 	"github.com/umuttalha/umut/internal/health"
 	"github.com/umuttalha/umut/internal/metadata"
+	"github.com/umuttalha/umut/internal/network"
 	"github.com/umuttalha/umut/internal/state"
 	"github.com/umuttalha/umut/internal/storage"
 )
@@ -37,6 +36,7 @@ type Service struct {
 	drainTimeout time.Duration
 	lastActivity map[string]time.Time
 	draining     map[string]time.Time
+	backends     map[string]*backendInfo // per-service proxy state machine
 	mu           sync.Mutex
 	server       *http.Server
 	stopCh       chan struct{}
@@ -55,6 +55,7 @@ func New(store *state.Store) *Service {
 		drainTimeout: DefaultDrainTimeout,
 		lastActivity: make(map[string]time.Time),
 		draining:     make(map[string]time.Time),
+		backends:     make(map[string]*backendInfo),
 		stopCh:       make(chan struct{}),
 	}
 }
@@ -112,7 +113,7 @@ func (s *Service) Stop() error {
 }
 
 // handleRequest is the HTTP handler. Caddy routes always_on=false services here.
-// On each request it records activity and forwards to the target VM, waking it if dormant.
+// Uses health-aware proxy with connection buffering during boot.
 func (s *Service) handleRequest(w http.ResponseWriter, r *http.Request) {
 	host := stripPort(r.Host)
 
@@ -123,51 +124,24 @@ func (s *Service) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := project.Name + "/" + svc.Name
+	route := &proxyRoute{
+		Project:    project,
+		Service:    svc,
+		BackendKey: key,
+	}
 
+	// Check drain state (idle shutdown in progress)
 	s.mu.Lock()
 	_, isDraining := s.draining[key]
 	s.mu.Unlock()
 
 	if isDraining {
-		http.Error(w, "service shutting down, retry in a moment", 503)
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", defaultRetryAfterSecs))
+		http.Error(w, "service shutting down, retry in a moment", http.StatusServiceUnavailable)
 		return
 	}
 
-	if !s.pids.isRunning(project.Name, svc.Name) {
-		if err := s.wakeUp(r.Context(), project, svc); err != nil {
-			if strings.Contains(err.Error(), "disk") && s.diskUsageRatio() >= storage.DiskDrainThreshold {
-				fmt.Printf("[scale-to-zero] wake blocked by disk, draining an idle VM for %s/%s\n", project.Name, svc.Name)
-				if s.drainOldestIdleVM() {
-					if retryErr := s.wakeUp(r.Context(), project, svc); retryErr == nil {
-						goto forward
-					}
-				}
-			}
-			http.Error(w, "service waking up, retry in a moment", 503)
-			return
-		}
-	}
-
-forward:
-
-	// Record activity for idle tracking
-	s.mu.Lock()
-	s.lastActivity[key] = time.Now()
-	s.mu.Unlock()
-
-	// Forward to the VM
-	port := svc.ServicePort
-	if port == 0 {
-		port = DefaultServicePort
-	}
-	target := fmt.Sprintf("http://%s:%d", svc.GuestIP, port)
-	targetURL, _ := url.Parse(target)
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	proxy.Transport = &http.Transport{
-		DialContext:           nil,
-		ResponseHeaderTimeout: 30 * time.Second,
-	}
-	proxy.ServeHTTP(w, r)
+	s.handleWithState(w, r, route)
 }
 
 // resolveHost finds the project and service matching a Caddy-routed hostname.
@@ -241,6 +215,19 @@ func (s *Service) wakeUp(ctx context.Context, project *state.Project, svc *state
 	if len(cfg.MetadataJSON) > 0 {
 		metadata.Register(cfg.GuestIP, cfg.MetadataJSON)
 	}
+
+	// Ensure TAP interface exists (may have been cleaned up if VM crashed).
+	tapName := svc.TAPDevice
+	if tapName == "" {
+		tapName = network.TapName(project.Name, svc.Name, 0)
+		svc.TAPDevice = tapName
+	}
+	network.DestroyTAP(tapName)
+	if _, err := network.CreateVMTAP(tapName); err != nil {
+		metadata.Deregister(cfg.GuestIP)
+		return fmt.Errorf("create tap: %w", err)
+	}
+	cfg.TAPDevice = tapName
 
 	vm, err := compute.StartVM(cfg)
 	if err != nil {
@@ -442,6 +429,9 @@ func (s *Service) idleLoop() {
 			s.pids.reconcileFromStore(s.store)
 			s.checkDiskSpace()
 			s.checkIdleServices()
+			s.cleanupStalePendings()
+			s.cleanupStaleResults()
+			s.recoverPendingRequests()
 		case <-s.stopCh:
 			return
 		}
