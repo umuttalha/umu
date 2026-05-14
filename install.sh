@@ -574,6 +574,78 @@ build_quickwit_base() {
     info "quickwit-base.ext4 created (500MB)"
 }
 
+# ── Build sqlite-server binary ───────────────────
+
+build_sqlite_server() {
+    if [ -f /usr/local/bin/sqlite-server ]; then
+        info "sqlite-server already installed"
+        return
+    fi
+    info "Building sqlite-server..."
+    local build_dir
+    build_dir=$(mktemp -d)
+    local repo="https://github.com/umuttalha/umut.git"
+
+    if ! command -v go &> /dev/null; then
+        local go_ver="1.24.5"
+        info "Installing Go ${go_ver}..."
+        curl -fsSL "https://go.dev/dl/go${go_ver}.linux-amd64.tar.gz" | tar -C /usr/local -xzf -
+        export PATH=$PATH:/usr/local/go/bin
+        echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
+        info "Go ${go_ver} installed"
+    fi
+
+    git clone --depth 1 "$repo" "$build_dir/umut" 2>/dev/null || {
+        fail "Could not clone $repo"
+    }
+    (cd "$build_dir/umut" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o /usr/local/bin/sqlite-server ./cmd/sqlite-server/)
+    chmod +x /usr/local/bin/sqlite-server
+    rm -rf "$build_dir"
+    info "sqlite-server built and installed"
+}
+
+# ── Build sqlite-base image ───────────────────
+
+build_sqlite_base() {
+    local base="$UMUT_DIR/images/sqlite-base.ext4"
+    if [ -f "$base" ]; then
+        info "sqlite-base.ext4 already present"
+        return
+    fi
+
+    info "Creating sqlite-base.ext4 (shared read-only root, 128MB)..."
+    truncate -s 128M "$base"
+    mkfs.ext4 -F "$base" > /dev/null 2>&1
+
+    local mnt="$(mktemp -d)"
+    mount "$base" "$mnt"
+
+    mkdir -p "$mnt"/{bin,dev,etc,proc,sys,tmp,usr/local/bin,sbin,workspace}
+    mkdir -p "$mnt/etc/ssl/certs"
+
+    cp /usr/local/bin/umut-init "$mnt/sbin/init"
+    chmod +x "$mnt/sbin/init"
+
+    cp /usr/local/bin/sqlite-server "$mnt/usr/local/bin/sqlite-server"
+    chmod +x "$mnt/usr/local/bin/sqlite-server"
+
+    # Copy CA certificates for future HTTPS
+    if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+        cp /etc/ssl/certs/ca-certificates.crt "$mnt/etc/ssl/certs/"
+    fi
+
+    echo "nameserver 8.8.8.8" > "$mnt/etc/resolv.conf"
+
+    umount "$mnt"
+    rmdir "$mnt"
+
+    chown 1000:1000 "$base" 2>/dev/null || true
+    chmod 0640 "$base"
+
+    sha256sum "$base" > "$UMUT_DIR/checksums/sqlite-base.ext4.sha256"
+    info "sqlite-base.ext4 created (128MB)"
+}
+
 # ── Install CNI plugins ───────────────────────
 
 CNI_PLUGIN_VERSION="v1.6.2"
@@ -891,6 +963,11 @@ chmod +x /etc/profile.d/99-umut.sh
 download_quickwit
 build_dns_local
 build_quickwit_base
+
+# ── SQLite runtime ────────────────────────────
+
+build_sqlite_server
+build_sqlite_base
 
 # ── Done ──────────────────────────────────────
 

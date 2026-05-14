@@ -16,6 +16,7 @@ var validRuntimes = map[string]bool{
 	"python":   true,
 	"deno":     true,
 	"quickwit": true,
+	"sqlite":   true,
 }
 
 var runtimeDefaults = map[string]struct {
@@ -26,6 +27,7 @@ var runtimeDefaults = map[string]struct {
 	"python":   {Port: 8080, VCPUs: 2, Memory: 1024},
 	"deno":     {Port: 8080, VCPUs: 2, Memory: 1024},
 	"quickwit": {Port: 7280, VCPUs: 2, Memory: 1024},
+	"sqlite":   {Port: 8080, VCPUs: 1, Memory: 256},
 }
 
 func RuntimeDefaultPort(runtime string) int {

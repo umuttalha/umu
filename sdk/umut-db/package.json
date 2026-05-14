@@ -1,0 +1,24 @@
+{
+  "name": "@umut/db",
+  "version": "0.1.0",
+  "description": "Connect to your umut SQLite database from JavaScript/TypeScript",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["sqlite", "serverless", "umut", "database"],
+  "license": "MIT"
+}

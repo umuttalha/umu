@@ -13,8 +13,11 @@ const (
 
 // HealthPathForRuntime returns the health check endpoint path for a given runtime.
 func HealthPathForRuntime(runtime string) string {
-	if runtime == "quickwit" {
+	switch runtime {
+	case "quickwit":
 		return "/api/v1/indexes"
+	case "sqlite":
+		return "/health"
 	}
 	return "/"
 }

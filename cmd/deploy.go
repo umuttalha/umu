@@ -211,7 +211,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		if storage.SharedRootExists(sCfg.Runtime) {
 			var dataDiskPath string
 
-			if sCfg.Storage != "local" && storageBoxAvailable && stateDiskErr == nil && sCfg.Runtime != "quickwit" {
+			if sCfg.Storage != "local" && storageBoxAvailable && stateDiskErr == nil && sCfg.Runtime != "quickwit" && sCfg.Runtime != "sqlite" {
 				dataDiskPath = stateDiskPath
 				st.stateDisk = stateDiskPath
 			} else {

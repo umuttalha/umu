@@ -543,6 +543,13 @@ func runEntrypoint(extraEnv []string) {
 			"SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
 		)
 		os.MkdirAll("/workspace/quickwit-data", 0755)
+	case fileExists("/usr/local/bin/sqlite-server"):
+		cmd = exec.Command("/usr/local/bin/sqlite-server")
+		cmd.Env = append(os.Environ(), extraEnv...)
+		cmd.Env = append(cmd.Env,
+			"PORT=8080",
+			"UMUT_DB_PATH=/workspace/data.db",
+		)
 	case fileExists("/workspace/start.sh"):
 		cmd = exec.Command("sh", "/workspace/start.sh")
 	case fileExists("/workspace/main.py"):

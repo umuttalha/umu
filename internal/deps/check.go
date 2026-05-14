@@ -46,7 +46,7 @@ func Check(requirementsPath, manifestPath string) ([]string, error) {
 // CheckFromBase mounts the base image, reads the manifest, and checks
 // requirements against it.
 func CheckFromBase(requirementsPath, baseImagePath string) ([]string, error) {
-	if strings.Contains(baseImagePath, "quickwit-base") {
+	if strings.Contains(baseImagePath, "quickwit-base") || strings.Contains(baseImagePath, "sqlite-base") {
 		return nil, nil
 	}
 
