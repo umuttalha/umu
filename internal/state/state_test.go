@@ -197,7 +197,7 @@ func TestStaleGenerationRejected(t *testing.T) {
 	}
 
 	staleCopy, _ := store1.Get("stale-project")
-	staleCopy.Status = StatusDormant
+	staleCopy.Status = StatusFrozen
 
 	if err := store1.Save(proj); err != nil {
 		t.Fatalf("second save via store1 failed: %v", err)

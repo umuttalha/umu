@@ -71,6 +71,7 @@ storage:
   s3:
     endpoint: %s
     region: %s
+    force_path_style_access: true
 `, projectName, s3Bucket, projectName, s3Bucket, projectName, s3Endpoint, s3Region)
 
 	return cfg, nil

@@ -470,6 +470,302 @@ func SendCtrlAltDel(socketPath string) error {
 	return nil
 }
 
+// SnapshotDir returns the directory where snapshots are stored.
+func SnapshotDir() string {
+	dataDir := os.Getenv("UMUT_DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/var/lib/umut"
+	}
+	return filepath.Join(dataDir, "snapshots")
+}
+
+// CreateSnapshot creates a Firecracker memory + VM state snapshot for fast restore.
+// The snapshot is saved to the snapshots directory under the VM name.
+// Must be called while the VM is running. Pauses the VM first if needed.
+func CreateSnapshot(socketPath, vmName string) error {
+	snapDir := SnapshotDir()
+	if err := os.MkdirAll(snapDir, 0755); err != nil {
+		return fmt.Errorf("create snapshot dir: %w", err)
+	}
+
+	memPath := filepath.Join(snapDir, vmName+".mem")
+	statePath := filepath.Join(snapDir, vmName+".state")
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", socketPath)
+			},
+		},
+		Timeout: 30 * time.Second,
+	}
+
+	// Pause the VM before creating snapshot (required by Firecracker)
+	pauseReq, _ := http.NewRequest(http.MethodPut, "http://localhost/actions",
+		strings.NewReader(`{"action_type":"Pause"}`))
+	pauseReq.Header.Set("Content-Type", "application/json")
+	pauseResp, err := client.Do(pauseReq)
+	if err != nil {
+		return fmt.Errorf("pause VM for snapshot: %w", err)
+	}
+	pauseResp.Body.Close()
+
+	body := fmt.Sprintf(`{
+		"mem_file_path": "%s",
+		"snapshot_path": "%s",
+		"snapshot_type": "Full"
+	}`, memPath, statePath)
+
+	req, err := http.NewRequest(http.MethodPut, "http://localhost/snapshot/create",
+		strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create snapshot request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("create snapshot: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("create snapshot returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Resume the VM after snapshot
+	resumeReq, _ := http.NewRequest(http.MethodPut, "http://localhost/actions",
+		strings.NewReader(`{"action_type":"Resume"}`))
+	resumeReq.Header.Set("Content-Type", "application/json")
+	resumeResp, resumeErr := client.Do(resumeReq)
+	if resumeErr != nil {
+		fmt.Printf(" warning: resume VM after snapshot: %v\n", resumeErr)
+	}
+	if resumeResp != nil {
+		resumeResp.Body.Close()
+	}
+
+	return nil
+}
+
+// HasSnapshot checks if a snapshot exists for the given VM name.
+func HasSnapshot(vmName string) bool {
+	snapDir := SnapshotDir()
+	memPath := filepath.Join(snapDir, vmName+".mem")
+	statePath := filepath.Join(snapDir, vmName+".state")
+	_, memErr := os.Stat(memPath)
+	_, stateErr := os.Stat(statePath)
+	return memErr == nil && stateErr == nil
+}
+
+// DeleteSnapshot removes snapshot files for a VM.
+func DeleteSnapshot(vmName string) error {
+	snapDir := SnapshotDir()
+	memPath := filepath.Join(snapDir, vmName+".mem")
+	statePath := filepath.Join(snapDir, vmName+".state")
+	os.Remove(memPath)
+	os.Remove(statePath)
+	return nil
+}
+
+// RestoreFromSnapshot restores a VM from a Firecracker snapshot.
+// This is much faster than a cold boot (~50-100ms vs 500ms+).
+func RestoreFromSnapshot(cfg VMConfig) (*RunningVM, error) {
+	vmName := cfg.ProjectName
+	snapDir := SnapshotDir()
+	memPath := filepath.Join(snapDir, vmName+".mem")
+	statePath := filepath.Join(snapDir, vmName+".state")
+
+	jailDir := filepath.Join(JailerBaseDir, "firecracker", vmName)
+	if isSafeJailerPath(jailDir) {
+		unmountStorageBoxProjects(filepath.Join(jailDir, "root"))
+		os.RemoveAll(jailDir)
+	}
+
+	if err := os.MkdirAll(LogDir, 0755); err != nil {
+		return nil, fmt.Errorf("create log dir: %w", err)
+	}
+
+	logPath := filepath.Join(LogDir, vmName+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("create log file: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	uid := JailerUID
+	gid := JailerGID
+	numaNode := 0
+
+	drives := []models.Drive{
+		{
+			DriveID:      firecracker.String("rootfs"),
+			PathOnHost:   firecracker.String(cfg.RootfsPath),
+			IsRootDevice: firecracker.Bool(true),
+			IsReadOnly:   firecracker.Bool(cfg.RootReadOnly),
+		},
+	}
+	for i, d := range cfg.ExtraDrives {
+		drives = append(drives, models.Drive{
+			DriveID:      firecracker.String(fmt.Sprintf("drive_%d", i+1)),
+			PathOnHost:   firecracker.String(d),
+			IsRootDevice: firecracker.Bool(false),
+			IsReadOnly:   firecracker.Bool(false),
+		})
+	}
+
+	kernelArgs := cfg.KernelArgs
+	if kernelArgs == "" {
+		var kerr error
+		kernelArgs, kerr = BuildKernelArgs(cfg)
+		if kerr != nil {
+			cancel()
+			logFile.Close()
+			return nil, fmt.Errorf("build kernel args: %w", kerr)
+		}
+	}
+
+	fcCfg := firecracker.Config{
+		SocketPath:      cfg.ProjectName + ".sock",
+		KernelImagePath: cfg.KernelPath,
+		KernelArgs:      kernelArgs,
+		Drives:          drives,
+		NetworkInterfaces: firecracker.NetworkInterfaces{{
+			StaticConfiguration: &firecracker.StaticNetworkConfiguration{
+				MacAddress:  cfg.MACAddress,
+				HostDevName: cfg.TAPDevice,
+			},
+		}},
+		MachineCfg: models.MachineConfiguration{
+			VcpuCount:  firecracker.Int64(int64(cfg.VCPUs)),
+			MemSizeMib: firecracker.Int64(int64(cfg.MemoryMB)),
+			Smt:        firecracker.Bool(false),
+		},
+		Seccomp: firecracker.SeccompConfig{
+			Enabled: true,
+		},
+		JailerCfg: &firecracker.JailerConfig{
+			UID:            &uid,
+			GID:            &gid,
+			ID:             cfg.ProjectName,
+			NumaNode:       &numaNode,
+			ChrootBaseDir:  JailerBaseDir,
+			ExecFile:       FirecrackerBin,
+			ChrootStrategy: firecracker.NewNaiveChrootStrategy(cfg.KernelPath),
+			Daemonize:      false,
+			Stdout:         logFile,
+			Stderr:         logFile,
+		},
+	}
+
+	silentLogger := log.New()
+	silentLogger.SetOutput(io.Discard)
+
+	machineOpts := []firecracker.Opt{
+		firecracker.WithLogger(log.NewEntry(silentLogger)),
+		// Use the SDK's snapshot restore handler with relative paths inside the jailer chroot
+		firecracker.WithSnapshot(vmName+".mem", vmName+".state"),
+	}
+
+	machine, err := firecracker.NewMachine(ctx, fcCfg, machineOpts...)
+	if err != nil {
+		cancel()
+		logFile.Close()
+		return nil, fmt.Errorf("create firecracker machine for snapshot restore: %w", err)
+	}
+
+	needsStorageBox := isStorageBoxDrive(cfg.RootfsPath)
+	for _, d := range cfg.ExtraDrives {
+		if isStorageBoxDrive(d) {
+			needsStorageBox = true
+			break
+		}
+	}
+	if needsStorageBox {
+		machine.Handlers.FcInit = machine.Handlers.FcInit.Swap(
+			storageBoxLinkFilesHandler(cfg.ProjectName),
+		)
+	}
+
+	// Hard-link snapshot files into the jailer chroot so Firecracker can access them.
+	// The snapshot handler uses relative paths within the chroot.
+	jailerRoot := filepath.Join(JailerBaseDir, "firecracker", cfg.ProjectName, "root")
+	if err := os.MkdirAll(jailerRoot, 0755); err != nil {
+		cancel()
+		logFile.Close()
+		return nil, fmt.Errorf("create jailer root: %w", err)
+	}
+
+	memDst := filepath.Join(jailerRoot, vmName+".mem")
+	stateDst := filepath.Join(jailerRoot, vmName+".state")
+	if err := os.Link(memPath, memDst); err != nil {
+		cancel()
+		logFile.Close()
+		return nil, fmt.Errorf("link snapshot mem: %w", err)
+	}
+	if err := os.Link(statePath, stateDst); err != nil {
+		os.Remove(memDst)
+		cancel()
+		logFile.Close()
+		return nil, fmt.Errorf("link snapshot state: %w", err)
+	}
+
+	// Fix permissions for jailer user access
+	os.Chown(memDst, uid, gid)
+	os.Chmod(memDst, 0640)
+	os.Chown(stateDst, uid, gid)
+	os.Chmod(stateDst, 0640)
+
+	// Fix drive file permissions too
+	fixJailerDrivePermissions(jailerRoot, uid, gid)
+
+	if err := machine.Start(ctx); err != nil {
+		os.Remove(memDst)
+		os.Remove(stateDst)
+		cancel()
+		logFile.Close()
+		if needsStorageBox {
+			unmountStorageBoxProjects(jailerRoot)
+		}
+		if isSafeJailerPath(jailDir) {
+			os.RemoveAll(jailDir)
+		}
+		return nil, fmt.Errorf("restore snapshot: %w", err)
+	}
+
+	cfg.SocketPath = machine.Cfg.SocketPath
+
+	if err := os.Chmod(jailerRoot, 0700); err != nil {
+		fmt.Printf(" warning: failed to chmod jailer root %s: %v\n", jailerRoot, err)
+	}
+
+	pid, _ := machine.PID()
+
+	if err := SetupCgroup(cfg.ProjectName, pid, cfg.VCPUs, cfg.MemoryMB, cfg.IOBandwidthBps, cfg.PidsMax, cfg.RootfsPath, cfg.ExtraDrives); err != nil {
+		fmt.Printf(" warning: failed to setup cgroup for %s: %v\n", cfg.ProjectName, err)
+	}
+
+	go func() {
+		machine.Wait(ctx)
+		logFile.Close()
+		unmountStorageBoxProjects(jailerRoot)
+		if isSafeJailerPath(jailDir) {
+			os.RemoveAll(jailDir)
+		}
+		CleanupCgroup(cfg.ProjectName)
+	}()
+
+	return &RunningVM{
+		Machine: machine,
+		Config:  cfg,
+		PID:     pid,
+		Cancel:  cancel,
+	}, nil
+}
+
 // fixJailerDrivePermissions chowns all .ext4 drive files and the kernel image
 // inside the jailer chroot to the specified UID/GID. The Firecracker Go SDK
 // hard-links drive files into the chroot but does not chown them, leaving them

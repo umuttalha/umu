@@ -38,7 +38,6 @@ const (
 	StatusRunning  Status = "running"
 	StatusStopped  Status = "stopped"
 	StatusCreating Status = "creating"
-	StatusDormant  Status = "dormant"
 	StatusError    Status = "error"
 	StatusFrozen   Status = "frozen"
 )

@@ -517,9 +517,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		if kerr != nil {
 			return fmt.Errorf("kernel args too long for service %s: %w", sCfg.Name, kerr)
 		}
-		if st.rootReadOnly && st.userDataDisk != "" {
-			svcState.KernelArgs += " init=" + compute.UserDataMount + "/sbin/init"
-		}
 
 		// Register metadata with HTTP registry before starting VM
 		metadata.EnsureRunning()
@@ -837,9 +834,6 @@ func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *sta
 		kernelArgs, kerr := compute.BuildKernelArgs(vmCfg)
 		if kerr != nil {
 			return fmt.Errorf("kernel args too long for service %s: %w", sCfg.Name, kerr)
-		}
-		if rootReadOnly && userDataDisk != "" {
-			kernelArgs += " init=" + compute.UserDataMount + "/sbin/init"
 		}
 
 		// Register metadata with HTTP registry before starting VM

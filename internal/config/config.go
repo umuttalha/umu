@@ -109,19 +109,19 @@ type UmutConfig struct {
 
 // ServiceConfig represents a single microVM within a project.
 type ServiceConfig struct {
-	Name                string            `toml:"name"`
-	BuildDir            string            `toml:"build_dir"`
-	Mode                string            `toml:"mode"` // "server" (default) or "function" — server stays running, function exits after execution
-	Expose              bool              `toml:"expose"`
-	VCPUs               int               `toml:"vcpus"`
-	MemoryMB            int               `toml:"memory_mb"`
-	AlwaysOn            bool              `toml:"always_on"`
-	Entrypoint          string            `toml:"entrypoint"`
-	Volumes             []string          `toml:"volumes"`
-	Env                 map[string]string `toml:"env"`
-	PreallocatedVolumes bool              `toml:"preallocated_volumes"`
-	Storage             string            `toml:"storage"` // "local" or "storagebox"; empty = default (SB when available)
-	Runtime             string            `toml:"runtime"` // "python" or "deno"; overrides top-level runtime for this service
+	Name                string            `toml:"name" json:"name"`
+	BuildDir            string            `toml:"build_dir" json:"build_dir"`
+	Mode                string            `toml:"mode" json:"mode"`
+	Expose              bool              `toml:"expose" json:"expose"`
+	VCPUs               int               `toml:"vcpus" json:"vcpus"`
+	MemoryMB            int               `toml:"memory_mb" json:"memory_mb"`
+	AlwaysOn            bool              `toml:"always_on" json:"always_on"`
+	Entrypoint          string            `toml:"entrypoint" json:"entrypoint"`
+	Volumes             []string          `toml:"volumes" json:"volumes"`
+	Env                 map[string]string `toml:"env" json:"env"`
+	PreallocatedVolumes bool              `toml:"preallocated_volumes" json:"preallocated_volumes"`
+	Storage             string            `toml:"storage" json:"storage"`
+	Runtime             string            `toml:"runtime" json:"runtime"`
 }
 
 // Default returns a single default service configuration.

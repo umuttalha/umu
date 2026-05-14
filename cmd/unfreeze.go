@@ -77,9 +77,8 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 					tapName = network.TapName(projectName, svc.Name, 0)
 					svc.TAPDevice = tapName
 				}
-				network.DestroyTAP(tapName)
-				if _, err := network.CreateVMTAP(tapName); err != nil {
-					return fmt.Errorf("service %s: create tap: %w", svc.Name, err)
+				if err := network.EnsureTAP(tapName); err != nil {
+					return fmt.Errorf("service %s: ensure tap: %w", svc.Name, err)
 				}
 				fmt.Printf("  ● [%s] TAP ready (%s)\n", svc.Name, svc.GuestIP)
 				return nil
@@ -111,45 +110,95 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 
 		if len(services) == 1 {
 			fmt.Printf("  ● Setting up network...")
-			network.DestroyTAP(tapName)
-			if _, err := network.CreateVMTAP(tapName); err != nil {
-				return fmt.Errorf("create tap: %w", err)
+			if err := network.EnsureTAP(tapName); err != nil {
+				return fmt.Errorf("ensure tap: %w", err)
 			}
 			fmt.Printf(" done (%s)\n", svc.GuestIP)
 		}
 
 		extraDrives, volsMapping := rebuildDrives(svc)
 
-		fmt.Printf("  ● Starting microVM (cpus=%d, mem=%dMB)...", svc.VCPUs, svc.MemoryMB)
-		vmCfg := compute.DefaultConfig(vmName, svc.DiskPath, tapName, svc.GuestIP, svc.MACAddress)
-		vmCfg.VCPUs = svc.VCPUs
-		vmCfg.MemoryMB = svc.MemoryMB
-		vmCfg.RootReadOnly = svc.RootReadOnly
-		vmCfg.ExtraDrives = extraDrives
-		vmCfg.HostsMapping = hostsString
-		vmCfg.VolumesMapping = volsMapping
-		vmCfg.KernelArgs = svc.KernelArgs
-		vmCfg.PidsMax = 4096
+		vmName = fmt.Sprintf("%s-%s", projectName, svc.Name)
+		snapshotName := vmName
+		usedSnapshot := false
 
-		if len(vmCfg.MetadataJSON) == 0 {
-			if mdJSON, mdErr := compute.BuildMetadataJSON(vmCfg, nil); mdErr == nil {
-				vmCfg.MetadataJSON = mdJSON
+		// Try snapshot restore first for faster boot (~50-100ms vs 500ms+ cold boot)
+		if compute.HasSnapshot(snapshotName) && svc.SocketPath == "" {
+			fmt.Printf("  ● Restoring from snapshot...")
+			tapName := svc.TAPDevice
+			if tapName == "" {
+				tapName = network.TapName(projectName, svc.Name, 0)
+				svc.TAPDevice = tapName
+			}
+			if err := network.EnsureTAP(tapName); err != nil {
+				return fmt.Errorf("ensure tap: %w", err)
+			}
+
+			vmCfg := compute.DefaultConfig(vmName, svc.DiskPath, tapName, svc.GuestIP, svc.MACAddress)
+			vmCfg.VCPUs = svc.VCPUs
+			vmCfg.MemoryMB = svc.MemoryMB
+			vmCfg.RootReadOnly = svc.RootReadOnly
+			vmCfg.ExtraDrives = extraDrives
+			vmCfg.HostsMapping = hostsString
+			vmCfg.VolumesMapping = volsMapping
+			vmCfg.KernelArgs = compute.StripInitArg(svc.KernelArgs)
+			vmCfg.PidsMax = 4096
+
+			if len(vmCfg.MetadataJSON) == 0 {
+				if mdJSON, mdErr := compute.BuildMetadataJSON(vmCfg, nil); mdErr == nil {
+					vmCfg.MetadataJSON = mdJSON
+				}
+			}
+
+			metadata.EnsureRunning()
+			if len(vmCfg.MetadataJSON) > 0 {
+				metadata.Register(svc.GuestIP, vmCfg.MetadataJSON)
+			}
+
+			vm, err := compute.RestoreFromSnapshot(vmCfg)
+			if err != nil {
+				fmt.Printf(" failed (will cold boot): %v\n", err)
+				compute.DeleteSnapshot(snapshotName)
+			} else {
+				svc.PID = vm.PID
+				svc.SocketPath = vm.Config.SocketPath
+				usedSnapshot = true
+				fmt.Printf(" done (snapshot)\n")
 			}
 		}
 
-		metadata.EnsureRunning()
-		if len(vmCfg.MetadataJSON) > 0 {
-			metadata.Register(svc.GuestIP, vmCfg.MetadataJSON)
-		}
+		if !usedSnapshot {
+			fmt.Printf("  ● Starting microVM (cpus=%d, mem=%dMB)...", svc.VCPUs, svc.MemoryMB)
+			vmCfg := compute.DefaultConfig(vmName, svc.DiskPath, tapName, svc.GuestIP, svc.MACAddress)
+			vmCfg.VCPUs = svc.VCPUs
+			vmCfg.MemoryMB = svc.MemoryMB
+			vmCfg.RootReadOnly = svc.RootReadOnly
+			vmCfg.ExtraDrives = extraDrives
+			vmCfg.HostsMapping = hostsString
+			vmCfg.VolumesMapping = volsMapping
+			vmCfg.KernelArgs = compute.StripInitArg(svc.KernelArgs)
+			vmCfg.PidsMax = 4096
 
-		vm, err := compute.StartVM(vmCfg)
-		if err != nil {
-			metadata.Deregister(svc.GuestIP)
-			return fmt.Errorf("start VM: %w", err)
+			if len(vmCfg.MetadataJSON) == 0 {
+				if mdJSON, mdErr := compute.BuildMetadataJSON(vmCfg, nil); mdErr == nil {
+					vmCfg.MetadataJSON = mdJSON
+				}
+			}
+
+			metadata.EnsureRunning()
+			if len(vmCfg.MetadataJSON) > 0 {
+				metadata.Register(svc.GuestIP, vmCfg.MetadataJSON)
+			}
+
+			vm, err := compute.StartVM(vmCfg)
+			if err != nil {
+				metadata.Deregister(svc.GuestIP)
+				return fmt.Errorf("start VM: %w", err)
+			}
+			svc.PID = vm.PID
+			svc.SocketPath = vmCfg.SocketPath
+			fmt.Printf(" done\n")
 		}
-		svc.PID = vm.PID
-		svc.SocketPath = vmCfg.SocketPath
-		fmt.Printf(" done\n")
 	}
 
 	// --- Phase 4: Configure proxy routes (do NOT wait for health check) ---
@@ -172,6 +221,11 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 
 	// --- Phase 5: Async health checks (non-blocking) ---
 	hpath := health.HealthPathForRuntime(project.Runtime)
+	// Use runtime-aware timeout: quickwit needs more time to boot
+	healthTimeout := 10 * time.Second
+	if project.Runtime == "quickwit" {
+		healthTimeout = 60 * time.Second
+	}
 	if len(services) > 1 {
 		g := new(errgroup.Group)
 		for i := range services {
@@ -180,7 +234,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 				continue
 			}
 			g.Go(func() error {
-				return health.CheckWithPath(services[i].GuestIP, services[i].ServicePort, hpath, 5*time.Second, 100*time.Millisecond)
+				return health.CheckWithPath(services[i].GuestIP, services[i].ServicePort, hpath, healthTimeout, 100*time.Millisecond)
 			})
 		}
 		go func() {
@@ -193,13 +247,15 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 	} else {
 		for _, svc := range services {
 			if svc.Expose {
-				go func(svc *state.Service) {
-					if err := health.CheckWithPath(svc.GuestIP, svc.ServicePort, hpath, 5*time.Second, 100*time.Millisecond); err != nil {
-						fmt.Printf("  health check: warning: %v\n", err)
+				i := 0
+				_ = i
+				go func() {
+					if err := health.CheckWithPath(svc.GuestIP, svc.ServicePort, hpath, healthTimeout, 100*time.Millisecond); err != nil {
+						fmt.Printf("  warning: health check: %v\n", err)
 					} else {
 						fmt.Printf("  ● Health check: OK\n")
 					}
-				}(svc)
+				}()
 			}
 		}
 	}

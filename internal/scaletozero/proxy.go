@@ -58,6 +58,7 @@ type backendInfo struct {
 	drainMu     sync.Mutex    // prevents concurrent drain + forward
 	draining    bool          // true while pending queue is being drained
 	drainFn     func()        // callback to drain pending queue on HEALTHY
+	holdSem     chan struct{} // signal connection holders on state change (cap 1, non-blocking send)
 }
 
 // newBackendInfo creates a new backend state tracker (starts FROZEN with zero boot info).
@@ -67,12 +68,13 @@ func newBackendInfo() *backendInfo {
 		State:       StateFrozen,
 		Cond:        sync.NewCond(m),
 		MaxRetries:  1,
+		holdSem:     make(chan struct{}, 1),
 	}
 }
 
 const (
-	defaultBootTimeout    = 30 * time.Second
-	defaultRetryAfterSecs = 1 // client should retry after 1s (app typically boots fast)
+	defaultBootTimeout    = 45 * time.Second
+	defaultRetryAfterMs   = 500 // client should retry after 500ms
 	resultCacheTTL        = 5 * time.Second
 )
 
@@ -200,7 +202,7 @@ func (s *Service) handleWithState(w http.ResponseWriter, r *http.Request, route 
 			return
 		}
 
-		w.Header().Set("Retry-After", fmt.Sprintf("%d", defaultRetryAfterSecs))
+		w.Header().Set("Retry-After", "1")
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	case StateFrozen:
@@ -225,9 +227,19 @@ func (bi *backendInfo) maybeDetect(route *proxyRoute) {
 		}
 		bi.Cond.L.Unlock()
 
+		// PID went to 0 → VM was frozen/killed externally → mark as FROZEN
+		if bi.PID == 0 {
+			if bi.State == StateHealthy || bi.State == StateBooting {
+				fmt.Printf("[proxy] %s: pid %d → 0 (detected external freeze)\n", bi.Key, oldPID)
+				bi.transition(StateFrozen)
+			}
+			return
+		}
+
 		// PID changed → new VM instance → never assume healthy.
 		// Even if the process is running, the app may still be booting.
 		if bi.State == StateHealthy && oldPID > 0 {
+			fmt.Printf("[proxy] %s: pid %d → %d (new VM detected)\n", bi.Key, oldPID, bi.PID)
 			bi.transition(StateBooting)
 			go bi.startHealthPoll()
 			return
@@ -257,7 +269,8 @@ func (bi *backendInfo) maybeDetect(route *proxyRoute) {
 
 // startHealthPoll runs a background health check loop for this backend.
 // When the health endpoint returns 200, transitions to HEALTHY.
-// Gives up after BootTimeout.
+// Gives up after BootTimeout. Does NOT transition if someone else
+// already resolved the state (e.g. wakeAndHold goroutine set HEALTHY).
 func (bi *backendInfo) startHealthPoll() {
 	port := bi.ServicePort
 	if port == 0 {
@@ -269,7 +282,7 @@ func (bi *backendInfo) startHealthPoll() {
 	}
 	url := fmt.Sprintf("http://%s:%d%s", bi.GuestIP, port, path)
 
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: 500 * time.Millisecond}
 
 	bi.Cond.L.Lock()
 	timeout := bi.BootTimeout
@@ -279,7 +292,7 @@ func (bi *backendInfo) startHealthPoll() {
 	bi.Cond.L.Unlock()
 
 	deadline := time.Now().Add(timeout)
-	interval := 200 * time.Millisecond
+	interval := 100 * time.Millisecond
 
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url)
@@ -287,7 +300,6 @@ func (bi *backendInfo) startHealthPoll() {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				bi.transition(StateHealthy)
-				// Drain pending requests now that backend is healthy
 				if bi.drainFn != nil {
 					bi.drainFn()
 				}
@@ -297,7 +309,14 @@ func (bi *backendInfo) startHealthPoll() {
 		time.Sleep(interval)
 	}
 
-	// Timed out
+	// Only transition to UNHEALTHY if still BOOTING — another goroutine
+	// (wakeAndHold) may have already set HEALTHY.
+	bi.Cond.L.Lock()
+	if bi.State != StateBooting {
+		bi.Cond.L.Unlock()
+		return
+	}
+	bi.Cond.L.Unlock()
 	fmt.Printf("[proxy] %s: health check timed out after %v\n", bi.Key, timeout)
 	bi.transition(StateUnhealthy)
 }
@@ -311,11 +330,16 @@ func (bi *backendInfo) transition(newState BackendState) {
 	if newState == StateBooting {
 		bi.BootStart = time.Now()
 	}
-	if newState == StateHealthy || newState == StateUnhealthy {
+	if newState == StateHealthy {
 		bi.Retries = 0
 	}
 	bi.Cond.L.Unlock()
 	bi.Cond.Broadcast()
+	// Signal connection holders (non-blocking)
+	select {
+	case bi.holdSem <- struct{}{}:
+	default:
+	}
 
 	if oldState != newState {
 		fmt.Printf("[proxy] %s: %s → %s\n", bi.Key, oldState, newState)
@@ -354,7 +378,10 @@ func (s *Service) wakeAndHold(w http.ResponseWriter, r *http.Request, route *pro
 	s.holdDuringBoot(w, r, route, bi)
 }
 
-// holdDuringBoot writes the request to disk and returns 202 Accepted immediately.
+// holdDuringBoot holds the HTTP connection open during VM boot, waiting up to
+// maxHoldTimeout for the backend to become healthy. If the VM boots quickly,
+// the request is forwarded directly (no retry needed). Falls back to the 202
+// retry model if the hold times out.
 func (s *Service) holdDuringBoot(w http.ResponseWriter, r *http.Request, route *proxyRoute, bi *backendInfo) {
 	// Queue size limit: prevent disk from filling up
 	if s.countPendingRequests(route.BackendKey) >= maxPendingPerKey {
@@ -388,43 +415,135 @@ func (s *Service) holdDuringBoot(w http.ResponseWriter, r *http.Request, route *
 		CreatedAt: time.Now(),
 	}
 
-	// Write to disk BEFORE returning 202 — guaranteed persistence
+	// Save to disk for crash safety
 	if err := s.savePendingRequest(route.BackendKey, req); err != nil {
 		fmt.Printf("[proxy] %s: failed to save pending request %s: %v\n", bi.Key, reqID, err)
 		http.Error(w, "failed to queue request", http.StatusInternalServerError)
 		return
 	}
 
-	// Dynamic Retry-After: estimate remaining boot time
-	retrySecs := defaultRetryAfterSecs
-	bi.Cond.L.Lock()
-	if !bi.BootStart.IsZero() {
-		bootTimeout := bi.BootTimeout
-		if bootTimeout == 0 {
-			bootTimeout = defaultBootTimeout
-		}
-		elapsed := time.Since(bi.BootStart)
-		if elapsed < bootTimeout {
-			remaining := int(bootTimeout.Seconds() - elapsed.Seconds())
-			if remaining > retrySecs {
-				retrySecs = remaining
-			}
-		}
-	}
-	bi.Cond.L.Unlock()
-	if retrySecs > 5 {
-		retrySecs = 5 // cap at 5 seconds
-	}
-	if retrySecs < 1 {
-		retrySecs = 1
-	}
-
-	fmt.Printf("[proxy] %s: queued request %s (method=%s, body=%d bytes) on disk — backend booting\n",
+	fmt.Printf("[proxy] %s: holding connection %s (method=%s, body=%d bytes) — backend booting\n",
 		bi.Key, reqID, r.Method, len(bodyBuf))
 
-	w.Header().Set("Retry-After", fmt.Sprintf("%d", retrySecs))
-	w.Header().Set("X-Request-ID", reqID)
-	http.Error(w, fmt.Sprintf(`{"status":"starting","request_id":"%s","retry_after_secs":%d}`, reqID, retrySecs), http.StatusAccepted)
+	// Hold the connection, waiting for the backend to become healthy.
+	const maxHoldTimeout = 5 * time.Second
+
+	// Wait for state change signal, checking periodically for timeout
+	bi.Cond.L.Lock()
+	state := bi.State
+	bi.Cond.L.Unlock()
+
+	if state == StateHealthy {
+		// Already healthy — rare but possible race
+		s.drainPending(route.BackendKey, bi)
+		s.replayAndForward(w, r, req, bi)
+		return
+	}
+
+	deadline := time.Now().Add(maxHoldTimeout)
+	for state == StateBooting && time.Now().Before(deadline) {
+		select {
+		case <-bi.holdSem:
+			// Drain the semaphore, it's a 1-buf channel, keep trying
+			state = bi.getState()
+			continue
+		case <-time.After(100 * time.Millisecond):
+			state = bi.getState()
+			continue
+		}
+	}
+
+	switch state {
+	case StateHealthy:
+		fmt.Printf("[proxy] %s: connection %s held for %v — forwarding now\n", bi.Key, reqID, time.Since(req.CreatedAt))
+		s.drainPending(route.BackendKey, bi)
+		s.replayAndForward(w, r, req, bi)
+		return
+	case StateBooting:
+		// Still booting — fall back to retry model
+		retrySecs := 1
+		bi.Cond.L.Lock()
+		if !bi.BootStart.IsZero() {
+			bootTimeout := bi.BootTimeout
+			if bootTimeout == 0 {
+				bootTimeout = defaultBootTimeout
+			}
+			elapsed := time.Since(bi.BootStart)
+			if elapsed < bootTimeout {
+				remaining := int(bootTimeout.Seconds() - elapsed.Seconds())
+				if remaining > retrySecs {
+					retrySecs = remaining
+				}
+			}
+		}
+		bi.Cond.L.Unlock()
+		if retrySecs > 5 {
+			retrySecs = 5
+		}
+		if retrySecs < 1 {
+			retrySecs = 1
+		}
+		fmt.Printf("[proxy] %s: connection hold timeout for %s — returning 202 (retry %ds)\n", bi.Key, reqID, retrySecs)
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retrySecs))
+		w.Header().Set("X-Request-ID", reqID)
+		http.Error(w, fmt.Sprintf(`{"status":"starting","request_id":"%s","retry_after_secs":%d}`, reqID, retrySecs), http.StatusAccepted)
+		return
+	default:
+		// UNHEALTHY — let the next request trigger auto-retry
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+}
+
+func (bi *backendInfo) getState() BackendState {
+	bi.Cond.L.Lock()
+	defer bi.Cond.L.Unlock()
+	return bi.State
+}
+
+// replayAndForward replays a held request to the VM and writes the response.
+func (s *Service) replayAndForward(w http.ResponseWriter, r *http.Request, req *pendingReq, bi *backendInfo) {
+	s.removePendingRequest(bi.Key, req.ID)
+
+	s.mu.Lock()
+	s.lastActivity[bi.Key] = time.Now()
+	s.mu.Unlock()
+
+	port := bi.ServicePort
+	if port == 0 {
+		port = DefaultServicePort
+	}
+	targetURL := fmt.Sprintf("http://%s:%d%s", bi.GuestIP, port, req.URL)
+
+	var httpReq *http.Request
+	var err error
+	if len(req.Body) > 0 {
+		httpReq, err = http.NewRequest(req.Method, targetURL, bytes.NewReader(req.Body))
+	} else {
+		httpReq, err = http.NewRequest(req.Method, targetURL, nil)
+	}
+	if err != nil {
+		http.Error(w, "failed to replay request", http.StatusInternalServerError)
+		return
+	}
+	httpReq.Header = req.Header
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		http.Error(w, "backend error", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	for k, vals := range resp.Header {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 // forwardToVM proxies the request to the backend VM.
@@ -508,7 +627,7 @@ func (s *Service) createBackend(route *proxyRoute) *backendInfo {
 		bi.State = StateBooting
 		bi.BootStart = time.Now() // synced with transition() behavior
 		go bi.startHealthPoll()
-	} else if route.Project.Status == state.StatusFrozen || route.Project.Status == state.StatusDormant {
+	} else if route.Project.Status == state.StatusFrozen {
 		bi.State = StateFrozen
 	} else {
 		bi.State = StateFrozen

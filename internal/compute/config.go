@@ -91,6 +91,17 @@ func BuildKernelArgs(cfg VMConfig) (string, error) {
 	return kernelArgs, nil
 }
 
+func StripInitArg(kernelArgs string) string {
+	parts := strings.Fields(kernelArgs)
+	var filtered []string
+	for _, p := range parts {
+		if !strings.HasPrefix(p, "init=") {
+			filtered = append(filtered, p)
+		}
+	}
+	return strings.Join(filtered, " ")
+}
+
 var (
 	DefaultKernelPath string
 	SocketDir         string

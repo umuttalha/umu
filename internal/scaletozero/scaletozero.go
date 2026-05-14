@@ -2,6 +2,7 @@ package scaletozero
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,8 +22,8 @@ const (
 	DefaultIdleTimeout  = 5 * time.Minute
 	DefaultDrainTimeout = 30 * time.Second
 	CheckInterval       = 30 * time.Second
-	WakeTimeout         = 10 * time.Second
-	WakePollInterval    = 200 * time.Millisecond
+	WakeTimeout         = 45 * time.Second
+	WakePollInterval    = 100 * time.Millisecond
 	DefaultServicePort  = 8080
 
 	diskDrainIdleTimeout = 1 * time.Minute
@@ -80,6 +81,7 @@ func (s *Service) Start() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)
+	mux.HandleFunc("GET /_activity/{project}/{service}", s.handleActivity)
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("127.0.0.1:%d", DefaultProxyPort),
@@ -130,18 +132,41 @@ func (s *Service) handleRequest(w http.ResponseWriter, r *http.Request) {
 		BackendKey: key,
 	}
 
-	// Check drain state (idle shutdown in progress)
+	// Check drain state (idle shutdown in progress) — cancel it if a request arrives
 	s.mu.Lock()
 	_, isDraining := s.draining[key]
+	if isDraining {
+		delete(s.draining, key)
+		s.lastActivity[key] = time.Now()
+	}
 	s.mu.Unlock()
 
-	if isDraining {
-		w.Header().Set("Retry-After", fmt.Sprintf("%d", defaultRetryAfterSecs))
-		http.Error(w, "service shutting down, retry in a moment", http.StatusServiceUnavailable)
-		return
-	}
+		s.handleWithState(w, r, route)
+}
 
-	s.handleWithState(w, r, route)
+// handleActivity returns the last activity timestamp for a project/service.
+// GET /_activity/{project}/{service}
+func (s *Service) handleActivity(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("project")
+	service := r.PathValue("service")
+	key := project + "/" + service
+
+	s.mu.Lock()
+	lastActive, ok := s.lastActivity[key]
+	s.mu.Unlock()
+
+	resp := map[string]interface{}{
+		"project":         project,
+		"service":         service,
+		"last_active_at":  nil,
+		"idle_timeout":    s.idleTimeout.String(),
+	}
+	if ok {
+		resp["last_active_at"] = lastActive.Format(time.RFC3339)
+		resp["idle_for"] = time.Since(lastActive).Round(time.Second).String()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // resolveHost finds the project and service matching a Caddy-routed hostname.
@@ -169,6 +194,7 @@ func stripPort(host string) string {
 }
 
 // wakeUp boots a dormant VM and waits for it to become healthy.
+// It tries snapshot restore first for faster wake (~50-100ms vs 500ms+ cold boot).
 func (s *Service) wakeUp(ctx context.Context, project *state.Project, svc *state.Service) error {
 	// Reconstruct VMConfig from stored state
 	vmName := project.Name + "-" + svc.Name
@@ -188,8 +214,8 @@ func (s *Service) wakeUp(ctx context.Context, project *state.Project, svc *state
 		VCPUs:        svc.VCPUs,
 		MemoryMB:     svc.MemoryMB,
 		SocketPath:   compute.SocketDir + "/" + vmName + ".sock",
-		ExtraDrives:  extraDrives,
-		KernelArgs:   svc.KernelArgs,
+		ExtraDrives:   extraDrives,
+		KernelArgs:   compute.StripInitArg(svc.KernelArgs),
 	}
 
 	// Build metadata JSON for HTTP metadata service
@@ -211,28 +237,44 @@ func (s *Service) wakeUp(ctx context.Context, project *state.Project, svc *state
 		}
 	}
 
+	// Pre-register metadata before starting VM — avoids blocking during boot.
 	metadata.EnsureRunning()
 	if len(cfg.MetadataJSON) > 0 {
 		metadata.Register(cfg.GuestIP, cfg.MetadataJSON)
 	}
 
-	// Ensure TAP interface exists (may have been cleaned up if VM crashed).
+	// Ensure TAP interface exists (keep alive across freeze/unfreeze for faster wake)
 	tapName := svc.TAPDevice
 	if tapName == "" {
 		tapName = network.TapName(project.Name, svc.Name, 0)
 		svc.TAPDevice = tapName
 	}
-	network.DestroyTAP(tapName)
-	if _, err := network.CreateVMTAP(tapName); err != nil {
+	if err := network.EnsureTAP(tapName); err != nil {
 		metadata.Deregister(cfg.GuestIP)
-		return fmt.Errorf("create tap: %w", err)
+		return fmt.Errorf("ensure tap: %w", err)
 	}
 	cfg.TAPDevice = tapName
 
-	vm, err := compute.StartVM(cfg)
-	if err != nil {
-		metadata.Deregister(cfg.GuestIP)
-		return fmt.Errorf("start VM: %w", err)
+	var vm *compute.RunningVM
+	var err error
+
+	// Try snapshot restore first for near-instant wake
+	if compute.HasSnapshot(vmName) {
+		fmt.Printf("[scale-to-zero] %s/%s: restoring from snapshot\n", project.Name, svc.Name)
+		vm, err = compute.RestoreFromSnapshot(cfg)
+		if err != nil {
+			fmt.Printf("[scale-to-zero] %s/%s: snapshot restore failed (will cold boot): %v\n", project.Name, svc.Name, err)
+			compute.DeleteSnapshot(vmName)
+			vm = nil
+		}
+	}
+
+	if vm == nil {
+		vm, err = compute.StartVM(cfg)
+		if err != nil {
+			metadata.Deregister(cfg.GuestIP)
+			return fmt.Errorf("start VM: %w", err)
+		}
 	}
 
 	// Update cfg with post-jailer socket path (StartVM rewrites it for jailer chroot)
@@ -244,7 +286,12 @@ func (s *Service) wakeUp(ctx context.Context, project *state.Project, svc *state
 	}
 
 	// Wait for VM to become healthy (HTTP health check on the service port)
-	healthCheckErr := health.CheckWithPath(svc.GuestIP, port, health.HealthPathForRuntime(project.Runtime), WakeTimeout, WakePollInterval)
+	// Use runtime-aware timeout: quickwit needs more time to boot
+	healthTimeout := WakeTimeout
+	if project.Runtime == "quickwit" {
+		healthTimeout = 60 * time.Second
+	}
+	healthCheckErr := health.CheckWithPath(svc.GuestIP, port, health.HealthPathForRuntime(project.Runtime), healthTimeout, WakePollInterval)
 	if healthCheckErr != nil {
 		compute.StopVMByPID(vm.PID, cfg.SocketPath)
 		return fmt.Errorf("VM started but failed health check: %w", healthCheckErr)
@@ -392,8 +439,6 @@ func (s *Service) drainOldestIdleVM() bool {
 	return true
 }
 
-// updateProjectStatus sets the project status based on its services' states.
-// "running" if any service has a VM running, "dormant" if all are stopped.
 func (s *Service) updateProjectStatus(project *state.Project) {
 	anyRunning := false
 	for _, svc := range project.Services {
@@ -405,7 +450,7 @@ func (s *Service) updateProjectStatus(project *state.Project) {
 	if anyRunning {
 		project.Status = state.StatusRunning
 	} else {
-		project.Status = state.StatusDormant
+		project.Status = state.StatusFrozen
 	}
 }
 
@@ -417,7 +462,6 @@ func (s *Service) NotifyActivity(projectName, serviceName string) {
 	s.mu.Unlock()
 }
 
-// idleLoop periodically checks for idle services and stops their VMs.
 func (s *Service) idleLoop() {
 	ticker := time.NewTicker(CheckInterval)
 	defer ticker.Stop()
@@ -429,11 +473,44 @@ func (s *Service) idleLoop() {
 			s.pids.reconcileFromStore(s.store)
 			s.checkDiskSpace()
 			s.checkIdleServices()
+			s.reconcileStaleState()
 			s.cleanupStalePendings()
 			s.cleanupStaleResults()
 			s.recoverPendingRequests()
 		case <-s.stopCh:
 			return
+		}
+	}
+}
+
+func (s *Service) reconcileStaleState() {
+	for _, project := range s.store.List() {
+		if project.Status != state.StatusRunning {
+			continue
+		}
+		anyRunning := false
+		for _, svc := range project.Services {
+			pid := svc.PID
+			if pid == 0 {
+				pid = s.pids.get(project.Name, svc.Name)
+			}
+			if pid > 0 && isProcessRunning(pid) {
+				anyRunning = true
+				if !s.pids.isRunning(project.Name, svc.Name) {
+					s.pids.set(project.Name, svc.Name, pid)
+				}
+				break
+			}
+		}
+		if !anyRunning {
+			fmt.Printf("[scale-to-zero] stale running state detected for %s, correcting to frozen\n", project.Name)
+			for _, svc := range project.Services {
+				if svc.PID > 0 {
+					svc.PID = 0
+				}
+			}
+			s.updateProjectStatus(project)
+			s.store.Save(project)
 		}
 	}
 }
@@ -512,6 +589,23 @@ func (s *Service) startDrain(projectName, serviceName, key string, pid int, sock
 }
 
 func (s *Service) finishDrain(projectName, serviceName, key string, pid int, socketPath string) {
+	// If the drain was canceled by an incoming request, don't kill the VM
+	s.mu.Lock()
+	_, stillDraining := s.draining[key]
+	if !stillDraining {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	// Create snapshot before stopping for faster wake-up
+	vmName := projectName + "-" + serviceName
+	if socketPath != "" && isProcessRunning(pid) {
+		if err := compute.CreateSnapshot(socketPath, vmName); err != nil {
+			fmt.Printf("[scale-to-zero] %s: snapshot failed: %v\n", key, err)
+		}
+	}
+
 	var err error
 	if isProcessRunning(pid) {
 		err = compute.StopVMByPID(pid, socketPath)

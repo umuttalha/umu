@@ -25,7 +25,7 @@ func (s *Server) freezeProject(name string) error {
 	if !exists {
 		return fmt.Errorf("project %q not found", name)
 	}
-	if project.Status != state.StatusRunning && project.Status != state.StatusDormant {
+	if project.Status != state.StatusRunning && project.Status != state.StatusFrozen {
 		return fmt.Errorf("project %q is %s", name, project.Status)
 	}
 
@@ -87,7 +87,7 @@ func (s *Server) unfreezeProject(name string) error {
 		vmCfg.ExtraDrives = extraDrives
 		vmCfg.HostsMapping = hostsMapping
 		vmCfg.VolumesMapping = volsMapping
-		vmCfg.KernelArgs = svc.KernelArgs
+		vmCfg.KernelArgs = compute.StripInitArg(svc.KernelArgs)
 		vmCfg.PidsMax = 4096
 
 		if len(vmCfg.MetadataJSON) == 0 {

@@ -38,7 +38,7 @@ func CheckWithPath(guestIP string, port int, path string, timeout, interval time
 	url := fmt.Sprintf("http://%s:%d%s", guestIP, port, path)
 	deadline := time.Now().Add(timeout)
 
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: 500 * time.Millisecond}
 
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url)

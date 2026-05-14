@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/umuttalha/umut/internal/compute"
 	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
 	"github.com/umuttalha/umut/internal/state"
@@ -51,7 +52,7 @@ func runFreeze(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("project %q not found", projectName)
 	}
 
-	if project.Status != state.StatusRunning && project.Status != state.StatusDormant {
+	if project.Status != state.StatusRunning && project.Status != state.StatusFrozen {
 		return fmt.Errorf("project %q is %s (must be running or dormant to freeze)", projectName, project.Status)
 	}
 
@@ -72,6 +73,14 @@ func runFreeze(cmd *cobra.Command, args []string) error {
 
 		if svc.PID > 0 {
 			fmt.Printf("  ● Stopping microVM (pid %d)...", svc.PID)
+			// Create snapshot before stopping for faster unfreeze
+			if svc.SocketPath != "" && svc.AlwaysOn == false {
+				if err := compute.CreateSnapshot(svc.SocketPath, fmt.Sprintf("%s-%s", projectName, svc.Name)); err != nil {
+					fmt.Printf(" warning: snapshot failed: %v\n", err)
+				} else {
+					fmt.Printf(" snapshot saved")
+				}
+			}
 			if err := syscall.Kill(svc.PID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 				fmt.Printf(" warning: %v\n", err)
 			} else {

@@ -189,9 +189,7 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 			if s3Cfg.SecretAccessKey != "" {
 				envVars["AWS_SECRET_ACCESS_KEY"] = s3Cfg.SecretAccessKey
 			}
-			if s3Cfg.Token != "" {
-				envVars["AWS_SESSION_TOKEN"] = s3Cfg.Token
-			}
+			envVars["QW_DISABLE_TELEMETRY"] = "1"
 			qwConfig, qwErr := qwrt.QuickwitConfig(qwrt.ResolveEndpointIP(s3Cfg.Endpoint), s3Cfg.Region, s3Cfg.Bucket, name)
 			if qwErr != nil {
 				writeError(w, http.StatusInternalServerError, "quickwit config: "+qwErr.Error())

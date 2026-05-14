@@ -97,7 +97,7 @@ func TestHandleRequest_DormantWakeUp(t *testing.T) {
 
 	project := &state.Project{
 		Name:   "myproject",
-		Status: state.StatusDormant,
+		Status: state.StatusFrozen,
 		Services: []*state.Service{
 			{
 				Name:        "main",
@@ -264,7 +264,7 @@ func TestCheckIdleServices_Dormant_Skipped(t *testing.T) {
 
 	project := &state.Project{
 		Name:   "dormant-project",
-		Status: state.StatusDormant,
+		Status: state.StatusFrozen,
 		Services: []*state.Service{
 			{
 				Name:    "main",
@@ -298,7 +298,7 @@ func TestWaker_HealthCheckTimeout(t *testing.T) {
 		Name:       "waketest",
 		BridgeName: "br-waketest",
 		BridgeIP:   "172.26.0.1",
-		Status:     state.StatusDormant,
+		Status:     state.StatusFrozen,
 		Services: []*state.Service{
 			{
 				Name:        "main",

@@ -83,6 +83,33 @@ func DestroyTAP(tapName string) error {
 	return run("ip", "link", "del", tapName)
 }
 
+// EnsureTAP checks if a TAP exists and is up on the shared bridge.
+// If it exists and is already on the bridge, do nothing (persistent across freeze/unfreeze).
+// If it exists but is down or not on the bridge, re-attach it.
+// If it doesn't exist, create it.
+func EnsureTAP(tapName string) error {
+	// Check if TAP exists
+	if err := run("ip", "link", "show", tapName); err != nil {
+		// TAP doesn't exist — create it
+		if _, err := CreateVMTAP(tapName); err != nil {
+			return err
+		}
+		return nil
+	}
+	// TAP exists — make sure it's on the bridge and up
+	// Check if already on shared bridge
+	masterOK := false
+	out, err := exec.Command("ip", "link", "show", "master", SharedBridge).Output()
+	if err == nil && strings.Contains(string(out), tapName) {
+		masterOK = true
+	}
+	if !masterOK {
+		run("ip", "link", "set", "dev", tapName, "master", SharedBridge)
+	}
+	run("ip", "link", "set", "dev", tapName, "up")
+	return nil
+}
+
 func DestroySharedBridge() error {
 	run("iptables", "-t", "nat", "-D", "PREROUTING", "-i", SharedBridge, "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")
 	run("iptables", "-t", "nat", "-D", "PREROUTING", "-i", SharedBridge, "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")

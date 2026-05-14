@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -441,7 +442,12 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "create user data disk: "+err.Error())
 				return
 			}
-			storage.InjectInit(userDataDisk)
+			if err := storage.InjectInit(userDataDisk); err != nil {
+				project.Status = state.StatusError
+				s.store.Save(project)
+				writeError(w, http.StatusInternalServerError, "inject init: "+err.Error())
+				return
+			}
 		} else {
 			diskPath, err = storage.CloneDisk(fmt.Sprintf("%s-%s", req.Name, sCfg.Name))
 			if err != nil {
@@ -476,6 +482,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 			RootReadOnly: rootReadOnly,
 			GuestIP:      guestIP,
 			MACAddress:   mac,
+			TAPDevice:    tapName,
 			ServicePort:  servicePort,
 		}
 
@@ -489,6 +496,28 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		vmCfg.MemoryMB = sCfg.MemoryMB
 		vmCfg.RootReadOnly = rootReadOnly
 		vmCfg.ExtraDrives = extraDrives
+		if userDataDisk != "" {
+			vmCfg.VolumesMapping = fmt.Sprintf("/dev/vdb:%s", compute.UserDataMount)
+		}
+		hostsEntries := []string{fmt.Sprintf("%s:%s", guestIP, sCfg.Name)}
+		if sCfg.Runtime == "quickwit" {
+			s3Cfg := config.GlobalS3Config()
+			if s3Cfg.Endpoint != "" {
+				eps := strings.TrimPrefix(s3Cfg.Endpoint, "https://")
+				eps = strings.TrimPrefix(eps, "http://")
+				epsHost := strings.SplitN(eps, "/", 2)[0]
+				if ips, err := net.LookupHost(epsHost); err == nil {
+					for _, ip := range ips {
+						if strings.Contains(ip, ":") {
+							continue // skip IPv6
+						}
+						hostsEntries = append(hostsEntries, fmt.Sprintf("%s:%s", ip, epsHost))
+						hostsEntries = append(hostsEntries, fmt.Sprintf("%s:%s.%s", ip, s3Cfg.Bucket, epsHost))
+					}
+				}
+			}
+		}
+		vmCfg.HostsMapping = strings.Join(hostsEntries, ",")
 
 		mergedEnv, err := s.secrets.Merge(req.Name, sCfg.Env)
 		if err == nil && len(mergedEnv) > 0 {
@@ -524,9 +553,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 				}
 				mergedEnv["AWS_ACCESS_KEY_ID"] = s3Cfg.AccessKeyID
 				mergedEnv["AWS_SECRET_ACCESS_KEY"] = s3Cfg.SecretAccessKey
-				if s3Cfg.Token != "" {
-					mergedEnv["AWS_SESSION_TOKEN"] = s3Cfg.Token
-				}
+				mergedEnv["QW_DISABLE_TELEMETRY"] = "1"
 				if userDataDisk != "" {
 					storage.InjectSecrets(userDataDisk, mergedEnv)
 				}
@@ -537,11 +564,12 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 			vmCfg.MetadataJSON = mdJSON
 		}
 
-		kernelArgs, _ := compute.BuildKernelArgs(vmCfg)
-		svcState.KernelArgs = kernelArgs
-		if rootReadOnly && userDataDisk != "" {
-			svcState.KernelArgs += " init=" + compute.UserDataMount + "/sbin/init"
+		kernelArgs, err := compute.BuildKernelArgs(vmCfg)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "build kernel args: "+err.Error())
+			return
 		}
+		svcState.KernelArgs = kernelArgs
 
 		vm, err := compute.StartVM(vmCfg)
 		if err != nil {
