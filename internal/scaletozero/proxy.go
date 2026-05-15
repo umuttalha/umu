@@ -426,7 +426,11 @@ func (s *Service) holdDuringBoot(w http.ResponseWriter, r *http.Request, route *
 		bi.Key, reqID, r.Method, len(bodyBuf))
 
 	// Hold the connection, waiting for the backend to become healthy.
-	const maxHoldTimeout = 5 * time.Second
+	// Use a longer timeout for runtimes with slower cold starts (e.g. quickwit).
+	maxHoldTimeout := 5 * time.Second
+	if route.Project.Runtime == "quickwit" {
+		maxHoldTimeout = 15 * time.Second
+	}
 
 	// Wait for state change signal, checking periodically for timeout
 	bi.Cond.L.Lock()

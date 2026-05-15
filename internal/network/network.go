@@ -33,10 +33,10 @@ func DetectHostInterface() string {
 
 func init() {
 	HostInterface = DetectHostInterface()
-	ensureSharedBridge()
+	EnsureSharedBridge()
 }
 
-func ensureSharedBridge() {
+func EnsureSharedBridge() {
 	if err := run("ip", "link", "show", SharedBridge); err != nil {
 		run("ip", "link", "add", "name", SharedBridge, "type", "bridge")
 		run("ip", "addr", "add", compute.CNIGateway+"/16", "dev", SharedBridge)

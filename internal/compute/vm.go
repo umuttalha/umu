@@ -106,9 +106,10 @@ func StartVM(cfg VMConfig) (*RunningVM, error) {
 			},
 		}},
 		MachineCfg: models.MachineConfiguration{
-			VcpuCount:  firecracker.Int64(int64(cfg.VCPUs)),
-			MemSizeMib: firecracker.Int64(int64(cfg.MemoryMB)),
-			Smt:        firecracker.Bool(false),
+			VcpuCount:       firecracker.Int64(int64(cfg.VCPUs)),
+			MemSizeMib:      firecracker.Int64(int64(cfg.MemoryMB)),
+			Smt:             firecracker.Bool(false),
+			TrackDirtyPages: true,
 		},
 		Seccomp: firecracker.SeccompConfig{
 			Enabled: true, // let jailer apply its built-in seccomp filter
@@ -349,14 +350,23 @@ func SnapshotDir() string {
 // CreateSnapshot creates a Firecracker memory + VM state snapshot for fast restore.
 // The snapshot is saved to the snapshots directory under the VM name.
 // Must be called while the VM is running. Pauses the VM first if needed.
+// With the jailer, snapshot paths are relative to the jailer chroot root dir.
 func CreateSnapshot(socketPath, vmName string) error {
 	snapDir := SnapshotDir()
 	if err := os.MkdirAll(snapDir, 0755); err != nil {
 		return fmt.Errorf("create snapshot dir: %w", err)
 	}
 
-	memPath := filepath.Join(snapDir, vmName+".mem")
-	statePath := filepath.Join(snapDir, vmName+".state")
+	// Jailer chroot root (where the snapshot files must live during creation)
+	jailerRoot := filepath.Dir(socketPath)
+	memFile := vmName + ".mem"
+	stateFile := vmName + ".state"
+	memJailPath := filepath.Join(jailerRoot, memFile)
+	stateJailPath := filepath.Join(jailerRoot, stateFile)
+
+	// Final destination in the shared snapshots directory
+	memDst := filepath.Join(snapDir, memFile)
+	stateDst := filepath.Join(snapDir, stateFile)
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -368,9 +378,9 @@ func CreateSnapshot(socketPath, vmName string) error {
 		Timeout: 30 * time.Second,
 	}
 
-	// Pause the VM before creating snapshot (required by Firecracker)
-	pauseReq, _ := http.NewRequest(http.MethodPut, "http://localhost/actions",
-		strings.NewReader(`{"action_type":"Pause"}`))
+	// Pause the VM before creating snapshot (required by Firecracker v1.0+)
+	pauseReq, _ := http.NewRequest(http.MethodPatch, "http://localhost/vm",
+		strings.NewReader(`{"state":"Paused"}`))
 	pauseReq.Header.Set("Content-Type", "application/json")
 	pauseResp, err := client.Do(pauseReq)
 	if err != nil {
@@ -378,11 +388,12 @@ func CreateSnapshot(socketPath, vmName string) error {
 	}
 	pauseResp.Body.Close()
 
+	// Use relative paths — Firecracker inside the jailer resolves them against the chroot root
 	body := fmt.Sprintf(`{
 		"mem_file_path": "%s",
 		"snapshot_path": "%s",
 		"snapshot_type": "Full"
-	}`, memPath, statePath)
+	}`, memFile, stateFile)
 
 	req, err := http.NewRequest(http.MethodPut, "http://localhost/snapshot/create",
 		strings.NewReader(body))
@@ -402,9 +413,9 @@ func CreateSnapshot(socketPath, vmName string) error {
 		return fmt.Errorf("create snapshot returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	// Resume the VM after snapshot
-	resumeReq, _ := http.NewRequest(http.MethodPut, "http://localhost/actions",
-		strings.NewReader(`{"action_type":"Resume"}`))
+	// Resume the VM after snapshot (Firecracker v1.0+ uses PATCH /vm)
+	resumeReq, _ := http.NewRequest(http.MethodPatch, "http://localhost/vm",
+		strings.NewReader(`{"state":"Resumed"}`))
 	resumeReq.Header.Set("Content-Type", "application/json")
 	resumeResp, resumeErr := client.Do(resumeReq)
 	if resumeErr != nil {
@@ -412,6 +423,14 @@ func CreateSnapshot(socketPath, vmName string) error {
 	}
 	if resumeResp != nil {
 		resumeResp.Body.Close()
+	}
+
+	// Move snapshot files from jailer root to the shared snapshots directory
+	if err := os.Rename(memJailPath, memDst); err != nil {
+		fmt.Printf(" warning: move snapshot mem %s → %s: %v\n", memJailPath, memDst, err)
+	}
+	if err := os.Rename(stateJailPath, stateDst); err != nil {
+		fmt.Printf(" warning: move snapshot state %s → %s: %v\n", stateJailPath, stateDst, err)
 	}
 
 	return nil
@@ -506,13 +525,18 @@ func RestoreFromSnapshot(cfg VMConfig) (*RunningVM, error) {
 			},
 		}},
 		MachineCfg: models.MachineConfiguration{
-			VcpuCount:  firecracker.Int64(int64(cfg.VCPUs)),
-			MemSizeMib: firecracker.Int64(int64(cfg.MemoryMB)),
-			Smt:        firecracker.Bool(false),
+			VcpuCount:       firecracker.Int64(int64(cfg.VCPUs)),
+			MemSizeMib:      firecracker.Int64(int64(cfg.MemoryMB)),
+			Smt:             firecracker.Bool(false),
+			TrackDirtyPages: true,
 		},
 		Seccomp: firecracker.SeccompConfig{
 			Enabled: true,
 		},
+		// Disable validation for snapshot restore — the SDK's ValidateLoadSnapshot
+		// does os.Stat() from the host CWD, which fails for jailer-relative paths.
+		// Firecracker inside the chroot resolves the relative paths correctly.
+		DisableValidation: true,
 		JailerCfg: &firecracker.JailerConfig{
 			UID:            &uid,
 			GID:            &gid,
@@ -522,6 +546,7 @@ func RestoreFromSnapshot(cfg VMConfig) (*RunningVM, error) {
 			ExecFile:       FirecrackerBin,
 			ChrootStrategy: firecracker.NewNaiveChrootStrategy(cfg.KernelPath),
 			Daemonize:      false,
+			CgroupVersion:  "2",
 			Stdout:         logFile,
 			Stderr:         logFile,
 		},
@@ -532,7 +557,9 @@ func RestoreFromSnapshot(cfg VMConfig) (*RunningVM, error) {
 
 	machineOpts := []firecracker.Opt{
 		firecracker.WithLogger(log.NewEntry(silentLogger)),
-		// Use the SDK's snapshot restore handler with relative paths inside the jailer chroot
+		// Use relative paths — Firecracker inside the jailer chroot resolves
+		// them against the chroot root. SDK validation would stat them from
+		// the host CWD and fail, so we disable validation for restores.
 		firecracker.WithSnapshot(vmName+".mem", vmName+".state"),
 	}
 
@@ -544,16 +571,15 @@ func RestoreFromSnapshot(cfg VMConfig) (*RunningVM, error) {
 	}
 
 	// Hard-link snapshot files into the jailer chroot so Firecracker can access them.
-	// The snapshot handler uses relative paths within the chroot.
 	jailerRoot := filepath.Join(JailerBaseDir, "firecracker", cfg.ProjectName, "root")
+	memDst := filepath.Join(jailerRoot, vmName+".mem")
+	stateDst := filepath.Join(jailerRoot, vmName+".state")
 	if err := os.MkdirAll(jailerRoot, 0755); err != nil {
 		cancel()
 		logFile.Close()
 		return nil, fmt.Errorf("create jailer root: %w", err)
 	}
 
-	memDst := filepath.Join(jailerRoot, vmName+".mem")
-	stateDst := filepath.Join(jailerRoot, vmName+".state")
 	if err := os.Link(memPath, memDst); err != nil {
 		cancel()
 		logFile.Close()

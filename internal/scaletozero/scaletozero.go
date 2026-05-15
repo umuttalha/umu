@@ -264,7 +264,9 @@ func (s *Service) wakeUp(ctx context.Context, project *state.Project, svc *state
 		vm, err = compute.RestoreFromSnapshot(cfg)
 		if err != nil {
 			fmt.Printf("[scale-to-zero] %s/%s: snapshot restore failed (will cold boot): %v\n", project.Name, svc.Name, err)
-			compute.DeleteSnapshot(vmName)
+			// Do NOT delete the snapshot — the failure is often transient
+			// (e.g. jailer cleanup race, SDK validation issue). Deleting
+			// destroys the fast-restore path permanently.
 			vm = nil
 		}
 	}

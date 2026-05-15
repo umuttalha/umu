@@ -5,9 +5,7 @@ set -e
 /usr/local/bin/umut destroy sb2 --force 2>/dev/null || true
 kill $(pgrep -f "firecracker --id sb2") 2>/dev/null || true
 sleep 1
-while umount /srv/jailer/firecracker/sb2-main/root/mnt/storagebox 2>/dev/null; do :; done
 rm -rf /srv/jailer/firecracker/sb2-main 2>/dev/null
-rm -rf /mnt/storagebox/projects/sb2 2>/dev/null
 ip link del tap-sb2-main 2>/dev/null || true
 
 echo "=== 1. COLD START (fresh deploy) ==="

@@ -56,40 +56,17 @@ Your code writes to /workspace
    Data disk (.ext4 file) on host
         │
         ▼
-┌──────────────────────────────────┐
-│  NVMe (UMUT_DATA_DIR)            │  ← Hot: active VMs only
-│  /mnt/nvme/umut/images/          │    ~3 GB/s read/write
-│                                  │
-│  Storage Box                     │  ← Cold: persistent state
-│  /mnt/storagebox/projects/       │    ~100 MB/s (network)
-└──────────────────────────────────┘
+   $UMUT_DATA_DIR/images/    (~3 GB/s read/write)
 ```
 
 | Disk | Lives on | Speed | Purpose |
 |------|----------|-------|---------|
-| Base images (shared, read-only) | NVMe | 3 GB/s | Python + Deno runtimes, shared across all VMs |
-| Data disk (active VM) | NVMe | 3 GB/s | `/workspace` for running code — CSV, SQLite, temp files |
-| State disk (frozen VM) | Storage Box | 100 MB/s | Persists source code + data across freeze/unfreeze |
+| Base images (shared, read-only) | UMUT_DATA_DIR | 3 GB/s | Python + Deno + Quickwit + SQLite runtimes, shared across all VMs |
+| Data disk (active VM) | UMUT_DATA_DIR | 3 GB/s | `/workspace` for running code — CSV, SQLite, temp files |
 
-### NVMe is a cache, Storage Box is the truth
+### Storage
 
-At 10K projects, you can't keep every project's data disk on NVMe. The model:
-
-```
-Cold project (not running)
-  └─ Source + state → Storage Box     (unlimited, 10TB scalable)
-  └─ Nothing on NVMe                  (zero local space)
-
-Project triggered
-  └─ Source restored → NVMe data disk  (fast execution)
-  └─ VM runs, writes data freely
-
-Project frozen (idle timeout)
-  └─ Data synced → Storage Box        (persistent)
-  └─ NVMe data disk deleted           (space reclaimed)
-```
-
-**Result:** Base images (5 GB) + ~200 active VM data disks (~10 GB) = **~15 GB on NVMe**. 385 GB free.
+Data disks are created on-demand when VMs boot. Frozen VMs keep their data disks on disk; destroyed VMs have their disks cleaned up.
 
 ### Per-runtime disk sizes
 
@@ -143,7 +120,7 @@ $UMUT_DATA_DIR/
 └── vmlinux          # kernel image
 ```
 
-System paths (`/srv/jailer`, `/usr/local/bin/firecracker`, `/mnt/storagebox`) stay hardcoded.
+System paths (`/srv/jailer`, `/usr/local/bin/firecracker`) stay hardcoded.
 
 ## Commands
 
@@ -167,7 +144,6 @@ System paths (`/srv/jailer`, `/usr/local/bin/firecracker`, `/mnt/storagebox`) st
 - Firecracker v1.15.1+
 - Caddy web server
 - 16 vCPUs, 61 GiB RAM (Hetzner AX42 tested)
-- Optional: Storage Box for persistent state, NVMe for fast storage
 
 ## Build
 
@@ -201,7 +177,7 @@ See [BANCHMARK.md](BANCHMARK.md) for full benchmarks on Hetzner AX42:
 |----------|------|------|------------|
 | n8n / API calls | 100-150 | 200+ | RAM |
 | Python + pandas | 30-50 | 80 | RAM + CPU |
-| SQLite OLTP | 10-20 | 40 | Storage Box fsync |
+| SQLite OLTP | 10-20 | 40 | Disk fsync |
 | Static / file server | 200-300 | 400+ | RAM |
 | **Deno (stateless)** | **500-800** | **1000+** | RAM |
 

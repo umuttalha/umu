@@ -15,7 +15,7 @@ const (
 func HealthPathForRuntime(runtime string) string {
 	switch runtime {
 	case "quickwit":
-		return "/api/v1/indexes"
+		return "/api/v1/version"
 	case "sqlite":
 		return "/health"
 	}
