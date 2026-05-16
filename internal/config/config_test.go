@@ -15,7 +15,7 @@ func TestConfigLoadAndMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error when toml missing, got: %v", err)
 	}
-	if len(cfg.Services) != 1 || cfg.Services[0].VCPUs != 1 || cfg.Services[0].MemoryMB != 256 || cfg.Services[0].AlwaysOn != false {
+	if len(cfg.Services) != 1 || cfg.Services[0].VCPUs != 2 || cfg.Services[0].MemoryMB != 1024 || cfg.Services[0].AlwaysOn != false {
 		t.Errorf("expected default config, got: %+v", cfg)
 	}
 
@@ -214,11 +214,11 @@ func TestRuntimeDefaultVCPUs(t *testing.T) {
 	if v := RuntimeDefaultVCPUs("quickwit"); v != 2 {
 		t.Errorf("expected quickwit vcpus 2, got %d", v)
 	}
-	if v := RuntimeDefaultVCPUs("python"); v != 1 {
-		t.Errorf("expected python vcpus 1, got %d", v)
+	if v := RuntimeDefaultVCPUs("python"); v != 2 {
+		t.Errorf("expected python vcpus 2, got %d", v)
 	}
-	if v := RuntimeDefaultVCPUs("unknown"); v != 1 {
-		t.Errorf("expected unknown runtime fallback vcpus 1, got %d", v)
+	if v := RuntimeDefaultVCPUs("unknown"); v != 2 {
+		t.Errorf("expected unknown runtime fallback vcpus 2, got %d", v)
 	}
 }
 
@@ -226,11 +226,11 @@ func TestRuntimeDefaultMemory(t *testing.T) {
 	if m := RuntimeDefaultMemory("quickwit"); m != 1024 {
 		t.Errorf("expected quickwit memory 1024, got %d", m)
 	}
-	if m := RuntimeDefaultMemory("python"); m != 256 {
-		t.Errorf("expected python memory 256, got %d", m)
+	if m := RuntimeDefaultMemory("python"); m != 1024 {
+		t.Errorf("expected python memory 1024, got %d", m)
 	}
-	if m := RuntimeDefaultMemory("unknown"); m != 256 {
-		t.Errorf("expected unknown runtime fallback memory 256, got %d", m)
+	if m := RuntimeDefaultMemory("unknown"); m != 1024 {
+		t.Errorf("expected unknown runtime fallback memory 1024, got %d", m)
 	}
 }
 

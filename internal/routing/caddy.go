@@ -8,7 +8,7 @@ import (
 	"net/http"
 )
 
-const (
+var (
 	CaddyAdminAPI       = "http://localhost:2019"
 	ScaleToZeroUpstream = "127.0.0.1:3699"
 )
@@ -23,36 +23,32 @@ type Route struct {
 
 // EnsureServer makes sure the Caddy HTTP server config exists for umut.
 func EnsureServer() error {
-	// Check if the server already exists
+	// Check if the server already exists.
+	// Caddy returns 200 + "null" body when the key exists in the config tree
+	// but has no value — meaning the server has NOT been created yet.
 	resp, err := http.Get(CaddyAdminAPI + "/config/apps/http/servers/umut")
 	if err != nil {
 		return fmt.Errorf("caddy API request: %w", err)
 	}
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	if resp.StatusCode == 200 {
-		return nil // Already exists
+	if resp.StatusCode == 200 && string(body) != "null" && len(body) > 2 {
+		return nil // Server already exists with valid config
 	}
 
 	serverCfg := map[string]interface{}{
-		"listen": []string{":80", ":443"},
+		"listen": []string{":80"},
 		"routes": []interface{}{},
 	}
 
-	appsCfg := map[string]interface{}{
-		"http": map[string]interface{}{
-			"servers": map[string]interface{}{
-				"umut": serverCfg,
-			},
-		},
-	}
-
-	appsBody, err := json.Marshal(appsCfg)
+	appsBody, err := json.Marshal(serverCfg)
 	if err != nil {
-		return fmt.Errorf("marshal apps config: %w", err)
+		return fmt.Errorf("marshal server config: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPut, CaddyAdminAPI+"/config/apps", bytes.NewReader(appsBody))
+	// PUT to the specific server path so we don't wipe existing srv0 config.
+	req, err := http.NewRequest(http.MethodPut, CaddyAdminAPI+"/config/apps/http/servers/umut", bytes.NewReader(appsBody))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}

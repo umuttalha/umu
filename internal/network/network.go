@@ -46,14 +46,6 @@ func EnsureSharedBridge() {
 		run("iptables", "-A", "FORWARD", "-o", SharedBridge, "-j", "ACCEPT")
 		run("iptables", "-A", "FORWARD", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
 	}
-	run("sysctl", "-w", "net.ipv4.conf."+SharedBridge+".route_localnet=1")
-	run("sysctl", "-w", "net.ipv4.conf.all.route_localnet=1")
-	if err := run("iptables", "-t", "nat", "-C", "PREROUTING", "-i", SharedBridge, "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53"); err != nil {
-		run("iptables", "-t", "nat", "-A", "PREROUTING", "-i", SharedBridge, "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")
-	}
-	if err := run("iptables", "-t", "nat", "-C", "PREROUTING", "-i", SharedBridge, "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53"); err != nil {
-		run("iptables", "-t", "nat", "-A", "PREROUTING", "-i", SharedBridge, "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")
-	}
 }
 
 func AllocateGuestIP(projectIndex, serviceIndex int) string {
@@ -65,7 +57,7 @@ func GenerateMAC(projectIndex, serviceIndex int) string {
 }
 
 func CreateVMTAP(tapName string) (string, error) {
-	if err := run("ip", "tuntap", "add", "dev", tapName, "mode", "tap"); err != nil {
+	if err := run("ip", "tuntap", "add", "dev", tapName, "mode", "tap", "user", fmt.Sprintf("%d", compute.JailerUID), "group", fmt.Sprintf("%d", compute.JailerGID)); err != nil {
 		return "", fmt.Errorf("create tap: %w", err)
 	}
 	if err := run("ip", "link", "set", "dev", tapName, "master", SharedBridge); err != nil {
@@ -88,16 +80,12 @@ func DestroyTAP(tapName string) error {
 // If it exists but is down or not on the bridge, re-attach it.
 // If it doesn't exist, create it.
 func EnsureTAP(tapName string) error {
-	// Check if TAP exists
 	if err := run("ip", "link", "show", tapName); err != nil {
-		// TAP doesn't exist — create it
 		if _, err := CreateVMTAP(tapName); err != nil {
 			return err
 		}
 		return nil
 	}
-	// TAP exists — make sure it's on the bridge and up
-	// Check if already on shared bridge
 	masterOK := false
 	out, err := exec.Command("ip", "link", "show", "master", SharedBridge).Output()
 	if err == nil && strings.Contains(string(out), tapName) {
@@ -107,6 +95,7 @@ func EnsureTAP(tapName string) error {
 		run("ip", "link", "set", "dev", tapName, "master", SharedBridge)
 	}
 	run("ip", "link", "set", "dev", tapName, "up")
+	run("ip", "tuntap", "change", "dev", tapName, "user", fmt.Sprintf("%d", compute.JailerUID), "group", fmt.Sprintf("%d", compute.JailerGID))
 	return nil
 }
 

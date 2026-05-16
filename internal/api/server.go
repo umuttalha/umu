@@ -448,6 +448,12 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "inject init: "+err.Error())
 				return
 			}
+			// Inject source code if build directory is accessible
+			if sCfg.BuildDir != "" && sCfg.BuildDir != "./" {
+				if _, sErr := os.Stat(sCfg.BuildDir); sErr == nil {
+					storage.InjectSourceIntoDisk(userDataDisk, sCfg.BuildDir)
+				}
+			}
 		} else {
 			diskPath, err = storage.CloneDisk(fmt.Sprintf("%s-%s", req.Name, sCfg.Name))
 			if err != nil {
@@ -459,6 +465,12 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 			if err := storage.InjectInit(diskPath); err != nil {
 				writeError(w, http.StatusInternalServerError, "inject init: "+err.Error())
 				return
+			}
+			// Inject source code if build directory is accessible
+			if sCfg.BuildDir != "" && sCfg.BuildDir != "./" {
+				if _, sErr := os.Stat(sCfg.BuildDir); sErr == nil {
+					storage.InjectSourceIntoDisk(diskPath, sCfg.BuildDir)
+				}
 			}
 		}
 

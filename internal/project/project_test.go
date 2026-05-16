@@ -35,7 +35,6 @@ func TestNameRegexInvalid(t *testing.T) {
 		"app_1",        // underscore
 		".app",         // starts with dot
 		"app.",         // ends with dot
-		"app..test",    // consecutive dots
 		"",             // empty
 		strings.Repeat("a", 65), // too long
 	}

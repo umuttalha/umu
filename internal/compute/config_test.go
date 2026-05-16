@@ -116,3 +116,132 @@ func TestBuildKernelArgsValidatesVolumesMapping(t *testing.T) {
 		t.Fatal("expected error for volumes mapping with null byte")
 	}
 }
+
+func TestStripInitArg_RemovesInitEquals(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want string
+	}{
+		{
+			name: "removes init=/workspace/sbin/init",
+			args: "console=ttyS0 umut.ip=10.0.0.2 init=/workspace/sbin/init umut.gw=172.26.0.1",
+			want: "console=ttyS0 umut.ip=10.0.0.2 umut.gw=172.26.0.1",
+		},
+		{
+			name: "removes init=/sbin/init",
+			args: "console=ttyS0 init=/sbin/init umut.ip=10.0.0.2",
+			want: "console=ttyS0 umut.ip=10.0.0.2",
+		},
+		{
+			name: "no-op on clean args",
+			args: "console=ttyS0 umut.ip=10.0.0.2 umut.gw=172.26.0.1",
+			want: "console=ttyS0 umut.ip=10.0.0.2 umut.gw=172.26.0.1",
+		},
+		{
+			name: "only init= arg",
+			args: "init=/workspace/sbin/init",
+			want: "",
+		},
+		{
+			name: "init= as only argument surrounded by spaces",
+			args: " init=/workspace/sbin/init ",
+			want: "",
+		},
+		{
+			name: "multiple init= variants removed",
+			args: "init=/foo init=/bar console=ttyS0",
+			want: "console=ttyS0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := StripInitArg(tt.args)
+			if got != tt.want {
+				t.Errorf("StripInitArg(%q) = %q, want %q", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildKernelArgs_NeverProducesInitEquals(t *testing.T) {
+	// Regression test: BuildKernelArgs must never include init= in its output.
+	// If init= leaks into the kernel command line, VMs will kernel panic
+	// on unfreeze because the init binary is on a not-yet-mounted data disk.
+	tests := []struct {
+		name string
+		cfg  VMConfig
+	}{
+		{
+			name: "minimal config",
+			cfg:  VMConfig{GuestIP: "10.0.0.2"},
+		},
+		{
+			name: "with hosts mapping",
+			cfg: VMConfig{
+				GuestIP:      "10.0.0.3",
+				HostsMapping: "10.0.0.3:api,10.0.0.4:db",
+			},
+		},
+		{
+			name: "with volumes mapping",
+			cfg: VMConfig{
+				GuestIP:        "10.0.0.4",
+				VolumesMapping: "/dev/vdb:/workspace",
+			},
+		},
+		{
+			name: "read-only root with full config",
+			cfg: VMConfig{
+				GuestIP:        "10.0.0.5",
+				RootReadOnly:   true,
+				HostsMapping:   "10.0.0.5:main",
+				VolumesMapping: "/dev/vdb:/workspace",
+				Mode:           "production",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := BuildKernelArgs(tt.cfg)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if strings.Contains(args, "init=") {
+				t.Errorf("BuildKernelArgs produced init= in output: %s\n"+
+					"This will cause kernel panic on VM unfreeze. The init binary "+
+					"is on the user data disk mounted by the init process itself.", args)
+			}
+		})
+	}
+}
+
+func TestStripInitArg_PreservesOtherArgs(t *testing.T) {
+	// Ensure StripInitArg doesn't corrupt other kernel arguments
+	args := "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.force_probe=1 root=/dev/vda ro umut.ip=172.26.1.2 umut.gw=172.26.0.1 umut.hosts=172.26.1.2:main umut.vols=/dev/vdb:/workspace init=/workspace/sbin/init"
+	got := StripInitArg(args)
+
+	// Must preserve all important args
+	requiredParts := []string{
+		"console=ttyS0",
+		"reboot=k",
+		"panic=1",
+		"root=/dev/vda",
+		"umut.ip=172.26.1.2",
+		"umut.gw=172.26.0.1",
+		"umut.hosts=172.26.1.2:main",
+		"umut.vols=/dev/vdb:/workspace",
+	}
+	for _, part := range requiredParts {
+		if !strings.Contains(got, part) {
+			t.Errorf("StripInitArg removed %q from args:\ngot:  %s", part, got)
+		}
+	}
+
+	// Must NOT contain init=
+	if strings.Contains(got, "init=") {
+		t.Errorf("StripInitArg failed to remove init=:\ngot: %s", got)
+	}
+}

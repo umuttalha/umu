@@ -232,7 +232,7 @@ func setupNetworking(ip, gw, hosts string) {
 		log.Println("[umut-init] error adding default route:", err)
 	}
 
-	resolvContent := "nameserver 8.8.8.8\n"
+	resolvContent := fmt.Sprintf("nameserver %s\n", gw)
 	resolvTmp := "/dev/shm/resolv.conf"
 	if err := os.WriteFile(resolvTmp, []byte(resolvContent), 0644); err != nil {
 		log.Println("[umut-init] error writing resolv.conf to shm:", err)
