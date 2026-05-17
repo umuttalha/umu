@@ -1,7 +1,7 @@
 // Package metadata provides the HTTP-based metadata service that allows guest
 // VMs to receive configuration from the host at boot time.
 //
-// A single HTTP server runs on the bridge gateway (172.26.0.1:MetadataHTTPPort)
+// A single HTTP server runs on the bridge gateway ([fd00:172:26::1]:MetadataHTTPPort)
 // and serves metadata to all VMs. VMs identify themselves by their source IP.
 // This replaces the vsock-based metadata server (#37 permanent fix).
 package metadata
@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/umuttalha/umut/internal/compute"
 )
 
 const MetadataHTTPPort = 9071
@@ -99,7 +101,7 @@ func splitHostPort(addr string) (string, string, error) {
 // only the first call actually starts the server.
 func EnsureRunning() {
 	startOnce.Do(func() {
-		addr := fmt.Sprintf("172.26.0.1:%d", MetadataHTTPPort)
+		addr := net.JoinHostPort(compute.CNIGateway, fmt.Sprintf("%d", MetadataHTTPPort))
 
 		if conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond); err == nil {
 			conn.Close()

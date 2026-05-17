@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 )
 
 var (
@@ -91,7 +93,7 @@ func AddRoute(domain, vmIP string, port int) error {
 			{
 				"handler": "reverse_proxy",
 				"upstreams": []map[string]string{
-					{"dial": fmt.Sprintf("%s:%d", vmIP, port)},
+					{"dial": net.JoinHostPort(vmIP, strconv.Itoa(port))},
 				},
 			},
 		},
@@ -123,7 +125,7 @@ func AddRoute(domain, vmIP string, port int) error {
 // without ever removing the route.
 func UpdateRoute(domain, newVMIP string, port int) error {
 	upstreams := []map[string]string{
-		{"dial": fmt.Sprintf("%s:%d", newVMIP, port)},
+		{"dial": net.JoinHostPort(newVMIP, strconv.Itoa(port))},
 	}
 
 	body, err := json.Marshal(upstreams)

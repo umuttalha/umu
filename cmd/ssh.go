@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 	proj "github.com/umuttalha/umut/internal/project"
@@ -74,7 +75,11 @@ func runSSH(cmd *cobra.Command, args []string) error {
 		sshArgs = append(sshArgs, "-i", sshKey)
 	}
 
-	sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", sshUser, guestIP))
+	if strings.Contains(guestIP, ":") {
+		sshArgs = append(sshArgs, fmt.Sprintf("%s@[%s]", sshUser, guestIP))
+	} else {
+		sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", sshUser, guestIP))
+	}
 
 	sshCmd := exec.Command("ssh", sshArgs[1:]...)
 	sshCmd.Stdin = os.Stdin

@@ -475,6 +475,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		}
 
 		guestIP := network.AllocateGuestIP(projectIndex, i)
+		globalIP := network.AllocateGuestGlobalIP(projectIndex)
 		mac := network.GenerateMAC(projectIndex, i)
 
 		tapName := network.TapName(req.Name, sCfg.Name, 0)
@@ -493,6 +494,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 			UserDataDisk: userDataDisk,
 			RootReadOnly: rootReadOnly,
 			GuestIP:      guestIP,
+			GlobalIP:     globalIP,
 			MACAddress:   mac,
 			TAPDevice:    tapName,
 			ServicePort:  servicePort,
@@ -504,6 +506,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		}
 
 		vmCfg := compute.DefaultConfig(fmt.Sprintf("%s-%s", req.Name, sCfg.Name), diskPath, tapName, guestIP, mac)
+		vmCfg.GuestGlobalIP = globalIP
 		vmCfg.VCPUs = sCfg.VCPUs
 		vmCfg.MemoryMB = sCfg.MemoryMB
 		vmCfg.RootReadOnly = rootReadOnly
@@ -590,6 +593,10 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		}
 		svcState.PID = vm.PID
 		svcState.SocketPath = vm.Config.SocketPath
+
+		if globalIP != "" {
+			network.SetupNDPProxy(globalIP)
+		}
 
 		if sCfg.Expose {
 			routeHostname := proj.RouteHostname(req.Name, sCfg.Name)

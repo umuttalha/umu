@@ -39,17 +39,49 @@ func init() {
 func EnsureSharedBridge() {
 	if err := run("ip", "link", "show", SharedBridge); err != nil {
 		run("ip", "link", "add", "name", SharedBridge, "type", "bridge")
-		run("ip", "addr", "add", compute.CNIGateway+"/16", "dev", SharedBridge)
+		run("ip", "addr", "add", compute.CNIGateway+"/64", "dev", SharedBridge)
 		run("ip", "link", "set", "dev", SharedBridge, "up")
-		run("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", compute.CNISubnetBase+".0.0/16", "-o", HostInterface, "-j", "MASQUERADE")
-		run("iptables", "-A", "FORWARD", "-i", SharedBridge, "-j", "ACCEPT")
-		run("iptables", "-A", "FORWARD", "-o", SharedBridge, "-j", "ACCEPT")
-		run("iptables", "-A", "FORWARD", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+		run("sysctl", "-w", "net.ipv6.conf.all.forwarding=1")
+		// IPv6 firewall: allow established/related, VM outbound, inter-VM, drop rest
+		run("ip6tables", "-A", "FORWARD", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+		run("ip6tables", "-A", "FORWARD", "-s", compute.CNISubnetBase+"::/64", "-p", "udp", "--dport", "53", "-j", "ACCEPT")
+		run("ip6tables", "-A", "FORWARD", "-s", compute.CNISubnetBase+"::/64", "-p", "tcp", "--dport", "53", "-j", "ACCEPT")
+		run("ip6tables", "-A", "FORWARD", "-s", compute.CNISubnetBase+"::/64", "-p", "tcp", "--dport", "80", "-j", "ACCEPT")
+		run("ip6tables", "-A", "FORWARD", "-s", compute.CNISubnetBase+"::/64", "-p", "tcp", "--dport", "443", "-j", "ACCEPT")
+		run("ip6tables", "-A", "FORWARD", "-s", compute.CNISubnetBase+"::/64", "-d", compute.CNISubnetBase+"::/64", "-j", "ACCEPT")
+		run("ip6tables", "-A", "FORWARD", "-s", compute.CNISubnetBase+"::/64", "-j", "DROP")
+		// Allow external SSH to VMs via global IPv6 (direct access without bare metal hop)
+		run("ip6tables", "-A", "FORWARD", "-d", compute.CNIGlobalPrefix6+"::/64", "-p", "tcp", "--dport", "22", "-j", "ACCEPT")
+		run("ip6tables", "-A", "FORWARD", "-d", compute.CNIGlobalPrefix6+"::/64", "-p", "tcp", "--dport", "9999", "-j", "ACCEPT")
 	}
 }
 
 func AllocateGuestIP(projectIndex, serviceIndex int) string {
-	return fmt.Sprintf("%s.%d.%d", SubnetBase, projectIndex, serviceIndex+2)
+	return fmt.Sprintf("%s:%d::%d", SubnetBase, projectIndex, serviceIndex+2)
+}
+
+// AllocateGuestGlobalIP assigns a globally-routable IPv6 from the Hetzner /64 prefix.
+// The host uses ::2, so VMs start at ::3. One global IP per project.
+func AllocateGuestGlobalIP(projectIndex int) string {
+	return fmt.Sprintf("%s::%d", compute.CNIGlobalPrefix6, 3+projectIndex)
+}
+
+// SetupNDPProxy configures NDP (Neighbor Discovery Protocol) proxying on the host
+// so that external traffic to the VM's global IPv6 is forwarded through the bridge.
+func SetupNDPProxy(globalIP string) error {
+	run("sysctl", "-w", "net.ipv6.conf.all.proxy_ndp=1")
+	if err := run("ip", "-6", "neigh", "add", "proxy", globalIP, "dev", HostInterface); err != nil {
+		return err
+	}
+	// Add a /128 route for this VM's global IP via the bridge so the host knows
+	// the address is hosted locally (via br-umut) rather than on the WAN interface.
+	return run("ip", "-6", "route", "add", globalIP, "dev", SharedBridge)
+}
+
+// RemoveNDPProxy removes the NDP proxy entry for a VM's global IPv6.
+func RemoveNDPProxy(globalIP string) {
+	run("ip", "-6", "neigh", "del", "proxy", globalIP, "dev", HostInterface)
+	run("ip", "-6", "route", "del", globalIP, "dev", SharedBridge)
 }
 
 func GenerateMAC(projectIndex, serviceIndex int) string {
@@ -100,11 +132,7 @@ func EnsureTAP(tapName string) error {
 }
 
 func DestroySharedBridge() error {
-	run("iptables", "-t", "nat", "-D", "PREROUTING", "-i", SharedBridge, "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")
-	run("iptables", "-t", "nat", "-D", "PREROUTING", "-i", SharedBridge, "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", "127.0.0.53:53")
-	run("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", compute.CNISubnetBase+".0.0/16", "-o", HostInterface, "-j", "MASQUERADE")
-	run("iptables", "-D", "FORWARD", "-i", SharedBridge, "-j", "ACCEPT")
-	run("iptables", "-D", "FORWARD", "-o", SharedBridge, "-j", "ACCEPT")
+	run("ip6tables", "-F", "FORWARD")
 	return run("ip", "link", "del", SharedBridge)
 }
 
@@ -116,26 +144,30 @@ func CountTAPOnBridge() int {
 	return strings.Count(string(out), ": tap-")
 }
 
-func SetupVMFirewall(guestIP string) error {
-	if !iptablesAvailable() {
+func SetupVMFirewall(guestIP, globalIP string) error {
+	if !ip6tablesAvailable() {
 		return nil
 	}
 	rules := [][]string{
 		// Insert at top: block VM-to-VM agent/SSH access — only the bridge gateway (host) can connect
-		{"iptables", "-I", "FORWARD", "1", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-s", compute.CNIGateway, "-j", "ACCEPT"},
-		{"iptables", "-I", "FORWARD", "2", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-j", "DROP"},
-		{"iptables", "-I", "FORWARD", "3", "-d", guestIP, "-p", "tcp", "--dport", "22", "-s", compute.CNIGateway, "-j", "ACCEPT"},
-		{"iptables", "-I", "FORWARD", "4", "-d", guestIP, "-p", "tcp", "--dport", "22", "-j", "DROP"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "25", "-j", "DROP"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-d", "10.0.0.0/8", "-j", "DROP"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-d", "172.16.0.0/12", "-j", "DROP"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-d", "192.168.0.0/16", "-j", "DROP"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "udp", "--dport", "53", "-j", "ACCEPT"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "443", "-j", "ACCEPT"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"},
-		{"iptables", "-A", "FORWARD", "-s", guestIP, "-j", "DROP"},
+		{"ip6tables", "-I", "FORWARD", "1", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-s", compute.CNIGateway, "-j", "ACCEPT"},
+		{"ip6tables", "-I", "FORWARD", "2", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-j", "DROP"},
+		{"ip6tables", "-I", "FORWARD", "3", "-d", guestIP, "-p", "tcp", "--dport", "22", "-s", compute.CNIGateway, "-j", "ACCEPT"},
+		{"ip6tables", "-I", "FORWARD", "4", "-d", guestIP, "-p", "tcp", "--dport", "22", "-j", "DROP"},
+		// VM outbound rules
+		{"ip6tables", "-A", "FORWARD", "-s", guestIP, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+		{"ip6tables", "-A", "FORWARD", "-s", guestIP, "-p", "udp", "--dport", "53", "-j", "ACCEPT"},
+		{"ip6tables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"},
+		{"ip6tables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"},
+		{"ip6tables", "-A", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "443", "-j", "ACCEPT"},
+		// Allow inter-VM ULA traffic
+		{"ip6tables", "-A", "FORWARD", "-s", guestIP, "-d", compute.CNISubnetBase+"::/64", "-j", "ACCEPT"},
+		{"ip6tables", "-A", "FORWARD", "-s", guestIP, "-j", "DROP"},
+	}
+	if globalIP != "" {
+		// Allow external SSH to the VM's global IPv6 (direct access without bare metal hop)
+		rules = append(rules, []string{"ip6tables", "-I", "FORWARD", "1", "-d", globalIP, "-p", "tcp", "--dport", "22", "-j", "ACCEPT"})
+		rules = append(rules, []string{"ip6tables", "-I", "FORWARD", "2", "-d", globalIP, "-p", "tcp", "--dport", "9999", "-j", "ACCEPT"})
 	}
 	for _, args := range rules {
 		if err := run(args[0], args[1:]...); err != nil {
@@ -145,25 +177,26 @@ func SetupVMFirewall(guestIP string) error {
 	return nil
 }
 
-func RemoveVMFirewall(guestIP string) error {
-	if !iptablesAvailable() {
+func RemoveVMFirewall(guestIP, globalIP string) error {
+	if !ip6tablesAvailable() {
 		return nil
 	}
 	rules := [][]string{
 		// Remove agent/SSH access rules
-		{"iptables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-s", compute.CNIGateway, "-j", "ACCEPT"},
-		{"iptables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-j", "DROP"},
-		{"iptables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "22", "-s", compute.CNIGateway, "-j", "ACCEPT"},
-		{"iptables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "22", "-j", "DROP"},
-		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "25", "-j", "DROP"},
-		{"iptables", "-D", "FORWARD", "-s", guestIP, "-d", "10.0.0.0/8", "-j", "DROP"},
-		{"iptables", "-D", "FORWARD", "-s", guestIP, "-d", "172.16.0.0/12", "-j", "DROP"},
-		{"iptables", "-D", "FORWARD", "-s", guestIP, "-d", "192.168.0.0/16", "-j", "DROP"},
-		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "udp", "--dport", "53", "-j", "ACCEPT"},
-		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"},
-		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "443", "-j", "ACCEPT"},
-		{"iptables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"},
-		{"iptables", "-D", "FORWARD", "-s", guestIP, "-j", "DROP"},
+		{"ip6tables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-s", compute.CNIGateway, "-j", "ACCEPT"},
+		{"ip6tables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "9999", "-j", "DROP"},
+		{"ip6tables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "22", "-s", compute.CNIGateway, "-j", "ACCEPT"},
+		{"ip6tables", "-D", "FORWARD", "-d", guestIP, "-p", "tcp", "--dport", "22", "-j", "DROP"},
+		{"ip6tables", "-D", "FORWARD", "-s", guestIP, "-p", "udp", "--dport", "53", "-j", "ACCEPT"},
+		{"ip6tables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"},
+		{"ip6tables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"},
+		{"ip6tables", "-D", "FORWARD", "-s", guestIP, "-p", "tcp", "--dport", "443", "-j", "ACCEPT"},
+		{"ip6tables", "-D", "FORWARD", "-s", guestIP, "-d", compute.CNISubnetBase+"::/64", "-j", "ACCEPT"},
+		{"ip6tables", "-D", "FORWARD", "-s", guestIP, "-j", "DROP"},
+	}
+	if globalIP != "" {
+		rules = append(rules, []string{"ip6tables", "-D", "FORWARD", "-d", globalIP, "-p", "tcp", "--dport", "22", "-j", "ACCEPT"})
+		rules = append(rules, []string{"ip6tables", "-D", "FORWARD", "-d", globalIP, "-p", "tcp", "--dport", "9999", "-j", "ACCEPT"})
 	}
 	for _, args := range rules {
 		run(args[0], args[1:]...)
@@ -171,8 +204,8 @@ func RemoveVMFirewall(guestIP string) error {
 	return nil
 }
 
-func iptablesAvailable() bool {
-	_, err := exec.LookPath("iptables")
+func ip6tablesAvailable() bool {
+	_, err := exec.LookPath("ip6tables")
 	return err == nil
 }
 

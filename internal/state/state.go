@@ -59,6 +59,7 @@ type Service struct {
 	Name         string   `json:"name"`
 	IP           string   `json:"ip"`
 	GuestIP      string   `json:"guest_ip"`
+	GlobalIP     string   `json:"global_ip,omitempty"`
 	TAPDevice    string   `json:"tap_device"`
 	DiskPath     string   `json:"disk_path"`
 	UserDataDisk string   `json:"user_data_disk,omitempty"`

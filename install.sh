@@ -667,25 +667,25 @@ mkdir -p "$CNI_CONF_DIR"
 cat > "$CNI_CONF_DIR/umut.conflist" << 'CNICONF'
 {
   "name": "umut",
-  "cniVersion": "1.0.0",
-  "plugins": [
-    {
-      "type": "ptp",
-      "ipMasq": true,
-      "ipam": {
-        "type": "host-local",
-        "subnet": "172.26.0.0/16",
-        "gateway": "172.26.0.1"
-      }
-    },
-    {
-      "type": "firewall"
-    },
-    {
-      "type": "tc-redirect-tap"
-    }
-  ]
-}
+   "cniVersion": "1.0.0",
+   "plugins": [
+     {
+       "type": "ptp",
+       "ipMasq": false,
+       "ipam": {
+         "type": "host-local",
+         "subnet": "fd00:172:26::/64",
+         "gateway": "fd00:172:26::1"
+       }
+     },
+     {
+       "type": "firewall"
+     },
+     {
+       "type": "tc-redirect-tap"
+     }
+   ]
+ }
 CNICONF
 
 info "CNI network config created at $CNI_CONF_DIR/umut.conflist"
@@ -736,36 +736,49 @@ info "Caddy configured"
 
 info "Configuring system networking..."
 
-# Enable IP forwarding
+# Enable IP forwarding (IPv4 + IPv6)
 sysctl -w net.ipv4.ip_forward=1 > /dev/null 2>&1
-echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-umut.conf
-
-# Enable route_localnet so DNAT to 127.0.0.53 works for VM DNS
-sysctl -w net.ipv4.conf.br-umut.route_localnet=1 > /dev/null 2>&1
-sysctl -w net.ipv4.conf.all.route_localnet=1 > /dev/null 2>&1
-cat >> /etc/sysctl.d/99-umut.conf << 'SYSCTL'
-net.ipv4.conf.br-umut.route_localnet=1
-net.ipv4.conf.all.route_localnet=1
+sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null 2>&1
+cat > /etc/sysctl.d/99-umut.conf << 'SYSCTL'
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
 SYSCTL
 
-# Setup base NAT rules (detect primary interface)
+# Setup ip6tables firewall for ULA VMs
 PRIMARY_IF=$(ip route get 1.1.1.1 | grep -oP 'dev \K\S+' | head -1)
 if [[ -n "$PRIMARY_IF" ]]; then
-    iptables -t nat -C POSTROUTING -o "$PRIMARY_IF" -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -o "$PRIMARY_IF" -j MASQUERADE
-    iptables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
-        iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-    info "NAT configured (interface: $PRIMARY_IF)"
-else
-    warn "Could not detect primary network interface — NAT not configured"
-fi
+    # IPv6 NAT: MASQUERADE ULA traffic to reach internet (Cloudflare DNS, S3/R2, etc.)
+    ip6tables -t nat -C POSTROUTING -s fd00:172:26::/64 -o "$PRIMARY_IF" -j MASQUERADE 2>/dev/null || \
+        ip6tables -t nat -A POSTROUTING -s fd00:172:26::/64 -o "$PRIMARY_IF" -j MASQUERADE
 
-# DNS forwarding: redirect VM DNS queries via bridge to systemd-resolved
-iptables -t nat -C PREROUTING -i br-umut -p udp --dport 53 -j DNAT --to-destination 127.0.0.53:53 2>/dev/null || \
-    iptables -t nat -A PREROUTING -i br-umut -p udp --dport 53 -j DNAT --to-destination 127.0.0.53:53
-iptables -t nat -C PREROUTING -i br-umut -p tcp --dport 53 -j DNAT --to-destination 127.0.0.53:53 2>/dev/null || \
-    iptables -t nat -A PREROUTING -i br-umut -p tcp --dport 53 -j DNAT --to-destination 127.0.0.53:53
-info "DNS forwarding from VMs to systemd-resolved configured"
+    # Allow established/related return traffic
+    ip6tables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+        ip6tables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+    # Allow VM outbound DNS
+    ip6tables -C FORWARD -s fd00:172:26::/64 -p udp --dport 53 -j ACCEPT 2>/dev/null || \
+        ip6tables -A FORWARD -s fd00:172:26::/64 -p udp --dport 53 -j ACCEPT
+    ip6tables -C FORWARD -s fd00:172:26::/64 -p tcp --dport 53 -j ACCEPT 2>/dev/null || \
+        ip6tables -A FORWARD -s fd00:172:26::/64 -p tcp --dport 53 -j ACCEPT
+
+    # Allow VM outbound HTTP/HTTPS
+    ip6tables -C FORWARD -s fd00:172:26::/64 -p tcp --dport 80 -j ACCEPT 2>/dev/null || \
+        ip6tables -A FORWARD -s fd00:172:26::/64 -p tcp --dport 80 -j ACCEPT
+    ip6tables -C FORWARD -s fd00:172:26::/64 -p tcp --dport 443 -j ACCEPT 2>/dev/null || \
+        ip6tables -A FORWARD -s fd00:172:26::/64 -p tcp --dport 443 -j ACCEPT
+
+    # Allow inter-VM ULA traffic
+    ip6tables -C FORWARD -s fd00:172:26::/64 -d fd00:172:26::/64 -j ACCEPT 2>/dev/null || \
+        ip6tables -A FORWARD -s fd00:172:26::/64 -d fd00:172:26::/64 -j ACCEPT
+
+    # Drop all other VM-initiated traffic
+    ip6tables -C FORWARD -s fd00:172:26::/64 -j DROP 2>/dev/null || \
+        ip6tables -A FORWARD -s fd00:172:26::/64 -j DROP
+
+    info "ip6tables firewall configured (interface: $PRIMARY_IF)"
+else
+    warn "Could not detect primary network interface — firewall not configured"
+fi
 
 # ── Create umut system user for jailer ─────────
 

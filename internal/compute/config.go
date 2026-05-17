@@ -38,6 +38,7 @@ type VMConfig struct {
 	RootReadOnly   bool
 	TAPDevice      string
 	GuestIP        string
+	GuestGlobalIP  string
 	MACAddress     string
 	VCPUs          int
 	MemoryMB       int
@@ -64,6 +65,9 @@ func BuildKernelArgs(cfg VMConfig) (string, error) {
 		rootFlag = "root=/dev/vda ro"
 	}
 	kernelArgs := "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.force_probe=1 " + rootFlag + " umut.ip=" + cfg.GuestIP + " umut.gw=" + CNIGateway
+	if cfg.GuestGlobalIP != "" {
+		kernelArgs += " umut.global_ip=" + cfg.GuestGlobalIP
+	}
 	if cfg.HostsMapping != "" {
 		if err := validateKernelArgValue(cfg.HostsMapping); err != nil {
 			return "", fmt.Errorf("hosts mapping: %w", err)
@@ -127,10 +131,11 @@ const (
 	DefaultQuickwitVCPUs  = 2
 	DefaultQuickwitMemory = 1024
 
-	// CNI networking
-	CNINetworkName = "umut"
-	CNIGateway     = "172.26.0.1"
-	CNISubnetBase  = "172.26"
+	// CNI networking — IPv6 ULA (Unique Local Address)
+	CNINetworkName    = "umut"
+	CNIGateway        = "fd00:172:26::1"
+	CNISubnetBase     = "fd00:172:26"
+	CNIGlobalPrefix6  = "2a01:4f8:10a:dcc"
 
 	// Jailer configuration
 	JailerBaseDir  = "/srv/jailer"

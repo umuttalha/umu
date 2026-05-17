@@ -37,6 +37,9 @@ func main() {
 		setupNetworking(ip, gw, hosts)
 	}
 
+	// Apply global IPv6 AFTER main networking is up (eth0 must exist)
+	applyGlobalIPv6FromCmdline()
+
 	mountVolumes(vols)
 
 	go func() {
@@ -90,7 +93,7 @@ func mountFilesystems() {
 	syscall.Mount(nsswitchTmp, "/etc/nsswitch.conf", "", syscall.MS_BIND, "")
 
 	hostsTmp := "/dev/shm/hosts"
-	os.WriteFile(hostsTmp, []byte("127.0.0.1 localhost\n"), 0644)
+	os.WriteFile(hostsTmp, []byte("127.0.0.1 localhost\n::1 localhost ip6-localhost\n"), 0644)
 	syscall.Mount(hostsTmp, "/etc/hosts", "", syscall.MS_BIND, "")
 
 	lo, _ := netlink.LinkByName("lo")
@@ -205,8 +208,41 @@ func mountVolumes(vols string) {
 	}
 }
 
+func setupGlobalIPv6(globalIP string) {
+	link, err := netlink.LinkByName("eth0")
+	if err != nil {
+		log.Println("[umut-init] error finding eth0 for global IP:", err)
+		return
+	}
+	addr, _ := netlink.ParseAddr(globalIP + "/64")
+	if err := netlink.AddrAdd(link, addr); err != nil {
+		// Address might already exist (from previous boot/restore)
+		log.Println("[umut-init] adding global IPv6 (may already exist):", err)
+	}
+	log.Printf("[umut-init] Added global IPv6: %s/64\n", globalIP)
+}
+
+// applyGlobalIPv6FromCmdline reads umut.global_ip from /proc/cmdline and applies it
+func applyGlobalIPv6FromCmdline() {
+	data, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return
+	}
+	for _, field := range strings.Fields(string(data)) {
+		if strings.HasPrefix(field, "umut.global_ip=") {
+			setupGlobalIPv6(strings.TrimPrefix(field, "umut.global_ip="))
+			return
+		}
+	}
+}
+
 func setupNetworking(ip, gw, hosts string) {
-	log.Printf("[umut-init] Configuring network: IP=%s/16 GW=%s\n", ip, gw)
+	isIPv6 := strings.Contains(ip, ":")
+	prefixLen := "/16"
+	if isIPv6 {
+		prefixLen = "/64"
+	}
+	log.Printf("[umut-init] Configuring network: IP=%s%s GW=%s\n", ip, prefixLen, gw)
 
 	link, err := netlink.LinkByName("eth0")
 	if err != nil {
@@ -214,7 +250,7 @@ func setupNetworking(ip, gw, hosts string) {
 		return
 	}
 
-	addr, _ := netlink.ParseAddr(ip + "/16")
+	addr, _ := netlink.ParseAddr(ip + prefixLen)
 	if err := netlink.AddrAdd(link, addr); err != nil {
 		log.Println("[umut-init] error adding address:", err)
 	}
@@ -224,22 +260,41 @@ func setupNetworking(ip, gw, hosts string) {
 	}
 
 	gwIP := net.ParseIP(gw)
-	route := &netlink.Route{
-		Scope: netlink.SCOPE_UNIVERSE,
-		Gw:    gwIP,
-	}
-	if err := netlink.RouteAdd(route); err != nil {
-		log.Println("[umut-init] error adding default route:", err)
+	if isIPv6 {
+		// IPv6: add default route via gateway
+		route := &netlink.Route{
+			Gw: gwIP,
+		}
+		if err := netlink.RouteAdd(route); err != nil {
+			log.Println("[umut-init] error adding IPv6 default route:", err)
+		}
+	} else {
+		route := &netlink.Route{
+			Scope: netlink.SCOPE_UNIVERSE,
+			Gw:    gwIP,
+		}
+		if err := netlink.RouteAdd(route); err != nil {
+			log.Println("[umut-init] error adding default route:", err)
+		}
 	}
 
-	resolvContent := fmt.Sprintf("nameserver %s\n", gw)
+	var resolvContent string
+	if isIPv6 {
+		resolvContent = "nameserver 2606:4700:4700::1111\nnameserver 2606:4700:4700::1001\n"
+	} else {
+		resolvContent = fmt.Sprintf("nameserver %s\n", gw)
+	}
 	resolvTmp := "/dev/shm/resolv.conf"
 	if err := os.WriteFile(resolvTmp, []byte(resolvContent), 0644); err != nil {
 		log.Println("[umut-init] error writing resolv.conf to shm:", err)
 	} else if err := syscall.Mount(resolvTmp, "/etc/resolv.conf", "", syscall.MS_BIND, ""); err != nil {
 		log.Println("[umut-init] error bind-mounting resolv.conf:", err)
 	} else {
-		log.Println("[umut-init] resolv.conf bind-mounted to", gw)
+		if isIPv6 {
+			log.Println("[umut-init] resolv.conf bind-mounted with Cloudflare IPv6 DNS")
+		} else {
+			log.Println("[umut-init] resolv.conf bind-mounted to", gw)
+		}
 	}
 
 	if data, err := os.ReadFile("/etc/resolv.conf"); err == nil {
@@ -539,7 +594,7 @@ func runEntrypoint(extraEnv []string) {
 		cmd.Env = append(os.Environ(), extraEnv...)
 		cmd.Env = append(cmd.Env,
 			"HOME=/tmp",
-			"QW_LISTEN_ADDRESS=0.0.0.0:7280",
+			"QW_LISTEN_ADDRESS=[::]:7280",
 			"SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
 		)
 		os.MkdirAll("/workspace/quickwit-data", 0755)
@@ -549,6 +604,7 @@ func runEntrypoint(extraEnv []string) {
 		cmd.Env = append(cmd.Env,
 			"PORT=8080",
 			"UMUT_DB_PATH=/workspace/data.db",
+			"HOST=[::]",
 		)
 	case fileExists("/workspace/start.sh"):
 		cmd = exec.Command("sh", "/workspace/start.sh")

@@ -139,6 +139,7 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 		}
 
 		guestIP := network.AllocateGuestIP(projectIndex, i)
+		globalIP := network.AllocateGuestGlobalIP(projectIndex)
 		mac := network.GenerateMAC(projectIndex, i)
 
 		svcState := &state.Service{
@@ -153,6 +154,7 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 			UserDataDisk: userDataDisk,
 			RootReadOnly: rootReadOnly,
 			GuestIP:      guestIP,
+			GlobalIP:     globalIP,
 			MACAddress:   mac,
 			ServicePort:  sCfg.Port,
 		}
@@ -163,6 +165,7 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 		}
 
 		vmCfg := compute.DefaultConfig(fmt.Sprintf("%s-%s", name, sCfg.Name), diskPath, "tap-"+name, guestIP, mac)
+		vmCfg.GuestGlobalIP = globalIP
 		vmCfg.VCPUs = sCfg.VCPUs
 		vmCfg.MemoryMB = sCfg.MemoryMB
 		vmCfg.RootReadOnly = rootReadOnly
@@ -228,6 +231,10 @@ func (s *Server) handleRedeploy(w http.ResponseWriter, r *http.Request, name str
 		}
 		svcState.PID = vm.PID
 		svcState.SocketPath = vm.Config.SocketPath
+
+		if globalIP != "" {
+			network.SetupNDPProxy(globalIP)
+		}
 
 		if sCfg.Expose {
 			routeHostname := proj.RouteHostname(name, sCfg.Name)

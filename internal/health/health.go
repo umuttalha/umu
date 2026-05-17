@@ -2,7 +2,9 @@ package health
 
 import (
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -35,7 +37,8 @@ func CheckWithTimeout(guestIP string, port int, timeout, interval time.Duration)
 
 // CheckWithPath polls an HTTP endpoint at the given path until it returns 200 or times out.
 func CheckWithPath(guestIP string, port int, path string, timeout, interval time.Duration) error {
-	url := fmt.Sprintf("http://%s:%d%s", guestIP, port, path)
+	hostPort := net.JoinHostPort(guestIP, strconv.Itoa(port))
+	url := "http://" + hostPort + path
 	deadline := time.Now().Add(timeout)
 
 	client := &http.Client{Timeout: 500 * time.Millisecond}

@@ -129,19 +129,22 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	// --- Phase 1: Pre-allocate IPs, MACs, TAP names ---
 	type servicePlan struct {
-		sCfg    config.ServiceConfig
-		guestIP string
-		mac     string
-		tapName string
+		sCfg     config.ServiceConfig
+		guestIP  string
+		globalIP string
+		mac      string
+		tapName  string
 	}
+	globalIP := network.AllocateGuestGlobalIP(projectIndex)
 
 	plans := make([]servicePlan, len(cfg.Services))
 	for i := range cfg.Services {
 		plans[i] = servicePlan{
-			sCfg:    cfg.Services[i],
-			guestIP: network.AllocateGuestIP(projectIndex, i),
-			mac:     network.GenerateMAC(projectIndex, i),
-			tapName: network.TapName(projectName, cfg.Services[i].Name, 0),
+			sCfg:     cfg.Services[i],
+			guestIP:  network.AllocateGuestIP(projectIndex, i),
+			globalIP: globalIP,
+			mac:      network.GenerateMAC(projectIndex, i),
+			tapName:  network.TapName(projectName, cfg.Services[i].Name, 0),
 		}
 	}
 
@@ -376,7 +379,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 		svcState := &state.Service{
 			Name:         sCfg.Name,
-			VCPUs:        sCfg.VCPUs,
 			MemoryMB:     sCfg.MemoryMB,
 			AlwaysOn:     sCfg.AlwaysOn,
 			Ephemeral:    !sCfg.AlwaysOn && len(sCfg.Volumes) == 0,
@@ -384,6 +386,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			Version:      1,
 			TAPDevice:    plans[i].tapName,
 			GuestIP:      plans[i].guestIP,
+			GlobalIP:     plans[i].globalIP,
 			MACAddress:   plans[i].mac,
 			ServicePort:  servicePort,
 			DiskPath:     st.diskPath,
@@ -399,6 +402,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			plans[i].guestIP,
 			plans[i].mac,
 		)
+		vmCfg.GuestGlobalIP = plans[i].globalIP
 		vmCfg.VCPUs = sCfg.VCPUs
 		vmCfg.MemoryMB = sCfg.MemoryMB
 		vmCfg.RootReadOnly = st.rootReadOnly
@@ -462,6 +466,13 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		svcState.PID = vm.PID
 		svcState.SocketPath = vm.Config.SocketPath
 		fmt.Printf(" done\n")
+
+		// Setup NDP proxy for direct IPv6 SSH access
+		if plans[i].globalIP != "" {
+			if err := network.SetupNDPProxy(plans[i].globalIP); err != nil {
+				fmt.Printf(" warning: NDP proxy setup failed for %s: %v\n", plans[i].globalIP, err)
+			}
+		}
 
 		states[i].svcState = svcState
 	}
@@ -929,11 +940,16 @@ func appendResolvedHosts(hostsMapping, endpointURL string) string {
 	if hostsMapping != "" {
 		entries = append(entries, hostsMapping)
 	}
+	// Prefer IPv6: add IPv6 entries first, then IPv4 as fallback
+	var v4entries []string
 	for _, ip := range ips {
-		if !strings.Contains(ip, ":") {
+		if strings.Contains(ip, ":") {
 			entries = append(entries, fmt.Sprintf("%s:%s", ip, hostname))
+		} else {
+			v4entries = append(v4entries, fmt.Sprintf("%s:%s", ip, hostname))
 		}
 	}
+	entries = append(entries, v4entries...)
 	return strings.Join(entries, ",")
 }
 
@@ -970,6 +986,26 @@ func appendMappedHost(hostsMapping, endpointURL, bucketHost string) string {
 func extractProjectIndexFromServices(project *state.Project) int {
 	for _, svc := range project.Services {
 		if svc.GuestIP != "" {
+			if strings.Contains(svc.GuestIP, ":") {
+				// IPv6 ULA: fd00:172:26:PP::SS  (PP=projectIndex, SS=serviceIndex+2)
+				parts := strings.Split(svc.GuestIP, ":")
+				skip := 0
+				for _, p := range parts {
+					if p == "" {
+						continue // zero-compression gap
+					}
+					skip++
+					if skip == 4 && p != "" {
+						// 4th non-empty hextet = project index
+						var idx int
+						fmt.Sscanf(p, "%d", &idx)
+						return idx
+					}
+				}
+				// If we didn't find 4 non-empty hextets, project index is 0 (compressed out)
+				return 0
+			}
+			// Legacy IPv4: 172.26.X.Y
 			parts := strings.Split(svc.GuestIP, ".")
 			if len(parts) == 4 {
 				var idx int

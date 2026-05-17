@@ -205,12 +205,13 @@ func (s *Service) wakeUp(ctx context.Context, project *state.Project, svc *state
 	extraDrives = append(extraDrives, svc.Volumes...)
 
 	cfg := compute.VMConfig{
-		ProjectName:  vmName,
-		KernelPath:   compute.DefaultKernelPath,
-		RootfsPath:   svc.DiskPath,
-		RootReadOnly: svc.RootReadOnly,
-		GuestIP:      svc.GuestIP,
-		MACAddress:   svc.MACAddress,
+		ProjectName:   vmName,
+		KernelPath:    compute.DefaultKernelPath,
+		RootfsPath:    svc.DiskPath,
+		RootReadOnly:  svc.RootReadOnly,
+		GuestIP:       svc.GuestIP,
+		GuestGlobalIP: svc.GlobalIP,
+		MACAddress:    svc.MACAddress,
 		VCPUs:        svc.VCPUs,
 		MemoryMB:     svc.MemoryMB,
 		SocketPath:   compute.SocketDir + "/" + vmName + ".sock",
@@ -644,6 +645,9 @@ func (s *Service) finishDrain(projectName, serviceName, key string, pid int, soc
 }
 
 func extractProjectIndexFromIP(bridgeIP string) int {
+	if strings.Contains(bridgeIP, ":") {
+		return -1 // IPv6: project index is embedded in guest IP, not bridge IP
+	}
 	parts := strings.Split(bridgeIP, ".")
 	if len(parts) != 4 {
 		return -1
