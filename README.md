@@ -70,9 +70,9 @@ umut ssh myserver
 Hetzner /64: 2a01:4f8:10a:dcc::/64
   Host (enp5s0):   2a01:4f8:10a:dcc::2
   Bridge (br-umut): fd00:172:26::1/64
-  VM 0:             2a01:4f8:10a:dcc::3   +   fd00:172:26:0::2
-  VM 1:             2a01:4f8:10a:dcc::4   +   fd00:172:26:1::2
-  VM N:             2a01:4f8:10a:dcc::{3+N}
+  VM 0:             2a01:4f8:10a:dcc::3   +   fd00:172:26::2
+  VM 1:             2a01:4f8:10a:dcc::4   +   fd00:172:26::12
+  VM N:             2a01:4f8:10a:dcc::{3+N}  +   fd00:172:26::{N*10+2}
 ```
 
 One VM = one project. Each VM gets a dedicated global IPv6 for direct SSH access.

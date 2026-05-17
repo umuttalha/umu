@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/umuttalha/umut/internal/compute"
-	"github.com/umuttalha/umut/internal/config"
 	"github.com/umuttalha/umut/internal/metadata"
 	"github.com/umuttalha/umut/internal/network"
 	proj "github.com/umuttalha/umut/internal/project"
@@ -56,14 +55,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if err := proj.ValidateName(projectName); err != nil {
 		return err
 	}
-
-	// Load configuration (Hierarchy: CLI > TOML > Defaults)
-	cwd, _ := os.Getwd()
-	cfg, err := config.Load(cwd)
-	if err != nil {
-		fmt.Printf("  warning: failed to load umut.toml: %v\n", err)
-	}
-	cfg.MergeCLI(deployCPUs, deployMemory)
 
 	// Load state
 	store, err := state.NewStore()
@@ -241,7 +232,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 }
 
 func injectSSHAuthorizedKeys(diskPath string, keyPath string) error {
-	// Priority: CLI flag > ~/.umut/ssh_key > ~/.ssh/id_ed25519.pub > ~/.ssh/id_rsa.pub
 	paths := []string{}
 	if keyPath != "" {
 		paths = append(paths, keyPath)
@@ -256,6 +246,7 @@ func injectSSHAuthorizedKeys(diskPath string, keyPath string) error {
 		paths = append(paths, filepath.Join(home, ".ssh", "id_rsa.pub"))
 	}
 
+	injected := 0
 	for _, p := range paths {
 		pub, err := os.ReadFile(p)
 		if err != nil {
@@ -264,7 +255,10 @@ func injectSSHAuthorizedKeys(diskPath string, keyPath string) error {
 		if err := storage.InjectAuthorizedKeys(diskPath, string(pub)); err != nil {
 			return err
 		}
-		return nil
+		injected++
 	}
-	return fmt.Errorf("no SSH public key found")
+	if injected == 0 {
+		return fmt.Errorf("no SSH public key found")
+	}
+	return nil
 }

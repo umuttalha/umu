@@ -102,21 +102,6 @@ func TestNameRegexCompiles(t *testing.T) {
 	}
 }
 
-func TestValidateNameWithSharedBaseImage(t *testing.T) {
-	err := ValidateName("python-base")
-	if err == nil {
-		t.Error("expected 'python-base' to be rejected as shared base image collision")
-	}
-	if err != nil && !strings.Contains(err.Error(), "shared base image") {
-		t.Errorf("expected shared-base-image error, got: %v", err)
-	}
-
-	err = ValidateName("deno-base")
-	if err == nil {
-		t.Error("expected 'deno-base' to be rejected as shared base image collision")
-	}
-}
-
 func TestRouteHostnameServiceMainAlwaysProjectName(t *testing.T) {
 	for _, name := range []string{"api", "backend", "test-svc", "x"} {
 		if got := RouteHostname(name, "main"); got != name {

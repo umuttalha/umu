@@ -75,10 +75,7 @@ func TestAllSubcommandsRegistered(t *testing.T) {
 		"top",
 		"exec",
 		"ssh",
-		"secrets",
-		"server",
 		"daemon",
-		"checksum",
 	}
 
 	cmdMap := make(map[string]bool)

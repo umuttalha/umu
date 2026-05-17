@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X '$(MODULE)/cmd.Commit=$(COMMIT)' \
 	-X '$(MODULE)/cmd.BuildDate=$(BUILD_DATE)'
 
-.PHONY: build build-init build-dns-local build-sqlite-server install clean vet test deploy build-quickwit-base rebuild-quickwit-base-server e2e-test
+.PHONY: build build-init install clean vet test deploy e2e-test
 
 SERVER ?= root@localhost
 # Set SERVER explicitly: make deploy SERVER=root@your-server-ip
@@ -20,17 +20,11 @@ build:
 build-init:
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o umut-init ./cmd/umut-init/
 
-build-dns-local:
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dns-local ./cmd/dns-local/
-
-build-sqlite-server:
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o sqlite-server ./cmd/sqlite-server/
-
 install: build
 	sudo mv $(BINARY) /usr/local/bin/$(BINARY)
 
 clean:
-	rm -f $(BINARY) umut-init dns-local sqlite-server
+	rm -f $(BINARY) umut-init
 
 ## Use make vet instead of go vet ./... — umut-init and some deps are Linux-only.
 vet:
@@ -40,22 +34,11 @@ test:
 	CGO_ENABLED=0 GOOS=linux go test ./...
 
 ## Push updated umut binary to remote server (no full reinstall needed).
-deploy: build build-init build-dns-local build-sqlite-server
+deploy: build build-init
 	ssh $(SERVER) "systemctl stop umut-daemon 2>/dev/null; sleep 1"
 	scp $(BINARY) $(SERVER):/usr/local/bin/umut
 	scp umut-init $(SERVER):/usr/local/bin/umut-init
-	scp dns-local $(SERVER):/usr/local/bin/dns-local
-	scp sqlite-server $(SERVER):/usr/local/bin/sqlite-server
-	ssh $(SERVER) "chmod +x /usr/local/bin/umut /usr/local/bin/umut-init /usr/local/bin/dns-local /usr/local/bin/sqlite-server && systemctl start umut-daemon && echo '✓ umut + umut-init + dns-local + sqlite-server updated on $(SERVER)'"
-
-build-quickwit-base:
-	@echo "Building Quickwit base image..."
-	sudo bash install.sh
-
-rebuild-quickwit-base-server:
-	scp install.sh $(SERVER):/tmp/umut-rebuild.sh
-	ssh $(SERVER) "rm -f /var/lib/umut/images/quickwit-base.ext4 /var/lib/umut/checksums/quickwit-base.ext4.sha256 && bash /tmp/umut-rebuild.sh && rm -f /tmp/umut-rebuild.sh"
-	@echo "✓ quickwit-base.ext4 rebuilt on $(SERVER)"
+	ssh $(SERVER) "chmod +x /usr/local/bin/umut /usr/local/bin/umut-init && systemctl start umut-daemon && echo '✓ umut + umut-init updated on $(SERVER)'"
 
 ## Run E2E tests on remote server (requires SERVER=root@your-server).
 e2e-test: deploy

@@ -15,42 +15,35 @@ Security model, audit findings, and hardening plan for **umut** — a personal s
 ## Assets
 
 | Asset | Location | Contains |
-|---|---|---|
-| **Secrets store** | `/var/lib/umut/secrets/<project>.json` (0600) | Environment variables (API keys, DB passwords) |
-| **API tokens** | `/var/lib/umut/tokens.json` (0600) | Bearer tokens for REST API auth |
+|---|---|---|---|
 | **SSH host keys** | `/var/lib/umut/keys/<proj>-<svc>/` (0600) | Per-project SSH identity |
-| **Project state** | `/var/lib/umut/state.json` (0644) | Project topology, IPs, ports, Caddy routes |
+| **Project state** | `/var/lib/umut/state.db` (0644) | Project topology, IPs, ports, Caddy routes |
 | **VM disk images** | `/var/lib/umut/images/*.ext4` (0644) | Guest rootfs and persistent volumes |
 | **Firecracker sockets** | `/var/lib/umut/sockets/*.sock` | VM lifecycle control API |
 | **VM console logs** | `/var/lib/umut/logs/*.log` (0644) | Guest stdout/stderr (may leak sensitive data) |
-| **Application logs** | Streamed via vsock (CID=3, port=9999) | User app output |
 
 ## Current Security Measures
 
 ### Isolation
 
 | Layer | Mechanism | Code |
-|---|---|---|
+|---|---|---|---|
 | **CPU** | cgroups v2 `cpu.max` — period-based throttling (`vcpus * 100000 / 100000`) | `internal/compute/cgroups_linux.go:38-41` |
 | **Memory** | cgroups v2 `memory.max` — hard limit in bytes | `internal/compute/cgroups_linux.go:44-49` |
 | **Network** | Separate Linux bridge (`br-<project>`) with isolated `/24` subnet per project | `internal/network/network.go:80-106` |
 | **Disk** | Clone-on-write (`cp --reflink=auto`) for per-VM rootfs copies; shared root image mounted read-only via Firecracker | `internal/compute/vm.go:66`, `internal/storage/storage.go` |
-| **Filesystem** | Secrets stored with `0600` permissions; atomic writes via `.tmp` rename | `internal/secrets/secrets.go` |
 
 ### Access Control
 
 | Layer | Mechanism | Code |
 |---|---|---|
-| **REST API** | Bearer token authentication + middleware for all admin endpoints | `internal/api/auth.go` |
-| **API keys** | Per-project keys (prefixed `umk_`) for external access | `internal/secrets/keys.go` |
-| **SSH** | Host SSH port forwarding via iptables DNAT (allocated ports: `2222 + project*10 + service`) | `internal/network/network.go:218-234` |
-| **Web exposure** | Only services with `expose = true` in `umut.toml` get Caddy routes | `cmd/deploy.go` |
+| **SSH** | Host SSH port forwarding via iptables DNAT | `internal/network/network.go:218-234` |
+| **Web exposure** | Only services with `--port` + `--expose` flags get Caddy routes | `cmd/deploy.go` |
 
 ### Process
 
 | Measure | Details |
-|---|---|
-| **Builder isolation** | Ephemeral builder VMs for Dockerfiles — never runs `docker build` on the host | `internal/builder/builder.go` |
+|---|---|---|
 | **Scale-to-zero** | Idle VMs can be frozen to disk via snapshot and restored on demand | `cmd/freeze.go`, `cmd/unfreeze.go` |
 | **Per-project host keys** | Unique SSH host keys regenerated on first deploy, reused across rolling updates | `cmd/deploy.go` |
 
@@ -99,7 +92,7 @@ This ensures that traffic between projects (e.g. `br-projA` → `br-projB`) is d
 ### F-04: Secrets passed via kernel command line ✅ RESOLVED
 
 **Severity:** High  
-**Files:** `internal/compute/config.go:32-46` (was), `cmd/deploy.go:217-232` (was), `internal/api/server.go:389-399` (was)
+**Files:** `internal/compute/config.go:32-46` (was), `cmd/deploy.go:217-232` (was)
 
 Environment variables (including secrets from `umut secrets set`) were base64-encoded and passed as a kernel boot parameter `umut.env=<base64-encoded JSON>`.
 
@@ -110,7 +103,7 @@ cat /proc/cmdline | grep -o 'umut.env=[^ ]*' | cut -d= -f2- | base64 -d
 
 **Fix implemented (2026-05-06):**
 - New `InjectSecrets()` in `internal/storage/storage.go` writes merged environment variables as JSON to `.umut/secrets.env` (0600, root-only) on the disk image before VM boot.
-- `cmd/deploy.go` and `internal/api/server.go` now call `MergeEnv()` + `storage.InjectSecrets()` instead of setting `vmCfg.EnvMapping`.
+- `cmd/deploy.go` now calls `MergeEnv()` + `storage.InjectSecrets()` instead of setting `vmCfg.EnvMapping`.
 - `BuildKernelArgs()` no longer includes `umut.env=` — kernel command line carries only non-sensitive static config (IP, gateway, hosts, volumes).
 - `umut-init` reads secrets from on-disk file first (`/workspace/.umut/secrets.env` on user data disks, `/.umut/secrets.env` on rootfs disks), with fallback to kernel cmdline for backward compatibility with old deployments.
 
@@ -194,7 +187,7 @@ All VMs previously used **CID=3** for vsock (the default Firecracker host CID). 
 - New `VsockCID` field in `VMConfig` (`internal/compute/config.go:43`) — each VM now receives a unique CID.
 - `VsockGuestCID(projectIndex, serviceIndex)` computes unique CIDs: `CID = 3 + projectIndex*10 + serviceIndex`. CIDs 0, 1, 2 are reserved by the VMCI/Vsock spec; guest VMs start at 3. Each project gets 10 CID slots.
 - `StartVM()` uses `cfg.VsockCID` instead of hardcoded 3, with fallback to `VsockCIDBase` (3) for backward compatibility when `VsockCID` is 0.
-- All VM creation paths (`cmd/deploy.go`, `internal/api/server.go`, `cmd/unfreeze.go`) compute and set unique CIDs per VM.
+- All VM creation paths (`cmd/deploy.go`, `cmd/unfreeze.go`) compute and set unique CIDs per VM.
 - `Service` state persists `VsockCID` in `state.json`; wake-up from scale-to-zero reuses the stored CID.
 - `computeVsockCIDFromBridgeIP()` fallback reconstructs CIDs from the bridge IP for old deployments that predate this fix.
 - **Test coverage**: `TestVsockGuestCID_Uniqueness` (1000 VMs, no collisions), `TestVsockGuestCID_Sequential`, `TestVsockGuestCID_ReservedRange`, `TestExtractProjectIndexFromIP`, `TestComputeVsockCIDFromBridgeIP` (with service-not-found, invalid IP, and multi-project edge cases), `TestServiceVsockCIDSerialization`, `TestServiceVsockCIDZeroOmitted`.
@@ -204,7 +197,7 @@ All VMs previously used **CID=3** for vsock (the default Firecracker host CID). 
 ### F-10: No metadata service for guest→host communication ✅ RESOLVED
 
 **Severity:** Informational  
-**Files:** `internal/metadata/server.go`, `internal/compute/config.go`, `internal/compute/vm.go`, `cmd/umut-init/main.go`, `cmd/deploy.go`, `internal/api/server.go`, `cmd/unfreeze.go`
+**Files:** `internal/metadata/server.go`, `internal/compute/config.go`, `internal/compute/vm.go`, `cmd/umut-init/main.go`, `cmd/deploy.go`, `cmd/unfreeze.go`
 
 The VM uses kernel command line (`umut.*` params parsed in `/proc/cmdline`) as the sole mechanism to receive configuration from the host. This is:
 - Limited to 2048 bytes total
@@ -217,14 +210,14 @@ The VM uses kernel command line (`umut.*` params parsed in `/proc/cmdline`) as t
 - **Guest side**: `umut-init` calls `fetchMetadata()` at boot, connecting to CID=2, port=9998 via vsock. Metadata takes priority over kernel cmdline for all configuration values.
 - **Backward compatibility**: Guests fall back to `/proc/cmdline` parsing if the metadata service is not available (old deployments, non-metadata-enabled VMs like builder VMs).
 - `VMConfig.MetadataJSON` field carries the pre-serialized metadata payload; `BuildMetadataJSON()` in `config.go` generates it.
-- All VM launch paths updated: `cmd/deploy.go`, `internal/api/server.go`, `cmd/unfreeze.go`.
+- All VM launch paths updated: `cmd/deploy.go`, `cmd/unfreeze.go`.
 
 ---
 
 ### F-11: SSH host key verification disabled everywhere ✅ RESOLVED
 
 **Severity:** Critical  
-**Files:** `cmd/deploy.go`, `cmd/ssh.go`, `cmd/list.go`, `internal/builder/builder.go`, `internal/api/server.go`
+**Files:** `cmd/deploy.go`, `cmd/ssh.go`, `cmd/list.go`, `internal/builder/builder.go`
 
 All SSH connections previously used `-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`, completely disabling host key verification. MITM on the network could intercept SSH traffic (including secret transfers during builds) without detection.
 
@@ -235,7 +228,7 @@ All SSH connections previously used `-o StrictHostKeyChecking=no -o UserKnownHos
   - `QuickSSH()` — `StrictHostKeyChecking=accept-new` for one-off health checks
   - `ScpCommand()` / `ScpQuick()` — same approach for SCP transfers
   - `UserSSHCommand()` — secure SSH display string without disabling verification
-- All call sites updated: `deploy.go`, `ssh.go`, `list.go`, `builder.go`, `server.go`
+- All call sites updated: `deploy.go`, `ssh.go`, `list.go`, `builder.go`
 
 ---
 
@@ -279,10 +272,6 @@ All SSH connections previously used `-o StrictHostKeyChecking=no -o UserKnownHos
 | ID | Action | Impact | Effort |
 |----|--------|--------|--------|
 | R-11 | **Implement vsock metadata service** — guest polls for config, secrets, and health heartbeats instead of kernel cmdline | Medium | High | `internal/metadata/server.go`, `internal/compute/config.go:BuildMetadataJSON()`, `cmd/umut-init/main.go:fetchMetadata()` | ✅ Done |
-| R-12 | **Add seccomp profiles for builder VMs** — separate, stricter profile for ephemeral Docker builder VMs | Medium | Medium | `internal/builder/builder.go`, `internal/compute/cgroups_linux.go` | ✅ Done |
-| R-13 | **Token rotation support** — add TTL/expiry to bearer tokens and per-project API keys | Low | Medium | ✅ Done |
-| R-14 | **Audit logging** — log all admin operations (deploy, destroy, secret modifications) to a structured audit file | Low | Medium | ✅ Done |
-| R-15 | **Host-level monitoring** — alert when total VM memory allocation exceeds 80% of host RAM, or when disk usage crosses 85% | Low | Low | ✅ Done |
 | R-16 | **Signed rootfs verification** — verify SHA256 checksum of the downloaded base rootfs before first use | Low | Low | `internal/storage/verify.go`, `install.sh` | ✅ Done |
 
 ## Firecracker Jailer Migration Guide
@@ -466,19 +455,8 @@ Guest uses metadata → replaces /proc/cmdline for configuration
 | `internal/compute/config.go:MetadataCID`, `MetadataServicePort` | Well-known vsock constants |
 | `internal/compute/vm.go` | Starts metadata server before `machine.Start()`, enables vsock when `MetadataJSON` is set |
 | `cmd/umut-init/main.go:fetchMetadata()` | Guest-side vsock client connecting to CID=2:9998 |
-| `cmd/deploy.go`, `internal/api/server.go`, `cmd/unfreeze.go` | Build `MetadataJSON` before VM launch |
-
-## Builder VM Isolation (R-12)
-
-Builder VMs now have stricter resource isolation compared to application VMs:
-
-- **PID limit**: 1024 (vs 4096 for app VMs) — tighter fork bomb containment
-- **I/O bandwidth**: 50 MB/s (vs 100 MB/s for app VMs) — prevents builder from saturating disk
-- **No vsock**: Builder VMs communicate only via SSH over TAP bridge; no vsock devices configured
-- **Jailer seccomp**: Builder VMs benefit from the same jailer-based seccomp filtering as app VMs
-
-These limits are applied in `internal/builder/builder.go:RunBuild()` when constructing the builder VM config.
+| `cmd/deploy.go`, `cmd/unfreeze.go` | Build `MetadataJSON` before VM launch |
 
 ---
 
-*Last updated: 2026-05-06 — F-10 (metadata service), R-08 (network namespaces), R-11 (vsock metadata), R-12 (builder seccomp), R-16 (rootfs verification) resolved.*
+*Last updated: 2026-05-17 — Simplified to CLI-only model. API server, audit logging, and host monitoring removed.*

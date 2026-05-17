@@ -1,8 +1,0 @@
-[[services]]
-name = "main"
-build_dir = "."
-expose = true
-vcpus = 2
-memory_mb = 1024
-mode = "server"
-always_on = true

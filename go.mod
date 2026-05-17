@@ -4,11 +4,9 @@ go 1.25.0
 
 require (
 	github.com/firecracker-microvm/firecracker-go-sdk v1.0.0
-	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/sirupsen/logrus v1.8.1
 	github.com/spf13/cobra v1.10.2
 	github.com/vishvananda/netlink v1.3.1
-	golang.org/x/crypto v0.31.0
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.42.0
 	modernc.org/sqlite v1.50.1
@@ -52,6 +50,7 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	go.mongodb.org/mongo-driver v1.8.3 // indirect
+	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/net v0.21.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
