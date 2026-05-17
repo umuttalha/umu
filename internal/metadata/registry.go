@@ -118,10 +118,20 @@ func EnsureRunning() {
 
 		ready := make(chan struct{})
 		go func() {
-			ln, err := net.Listen("tcp", addr)
+			var ln net.Listener
+			var err error
+			for attempt := 0; attempt < 10; attempt++ {
+				if attempt > 0 {
+					time.Sleep(1 * time.Second)
+				}
+				ln, err = net.Listen("tcp", addr)
+				if err == nil {
+					break
+				}
+			}
 			close(ready)
 			if err != nil {
-				fmt.Printf("  [metadata] HTTP server error: %v\n", err)
+				fmt.Printf("  [metadata] HTTP server error (gave up after 10 attempts): %v\n", err)
 				return
 			}
 			fmt.Printf("  [metadata] HTTP metadata server listening on %s\n", addr)

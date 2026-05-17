@@ -3,11 +3,9 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -28,20 +26,8 @@ func initImagesDir() {
 }
 
 const (
-	BaseImageName      = "base.ext4"
-	UserDataDiskSizeMB = 1024
+	BaseImageName = "ubuntu-base.ext4"
 )
-
-// GetSharedRootImage returns the path to the shared read-only base image for the given runtime.
-func GetSharedRootImage(runtime string) string {
-	return filepath.Join(ImagesDir, runtime+"-base.ext4")
-}
-
-// SharedRootExists returns true if the shared read-only base image for the given runtime exists.
-func SharedRootExists(runtime string) bool {
-	_, err := os.Stat(GetSharedRootImage(runtime))
-	return err == nil
-}
 
 // CloneDisk creates a copy of the base rootfs for a new project.
 // Uses cp --reflink=auto for COW cloning on supported filesystems (btrfs, xfs).
@@ -71,8 +57,25 @@ func CloneDisk(projectName string) (string, error) {
 	return destPath, nil
 }
 
+// ResizeDisk grows a sparse ext4 disk image to the specified size in GB.
+func ResizeDisk(diskPath string, sizeGB int) error {
+	if sizeGB <= 0 {
+		return nil
+	}
+	// Grow sparse file
+	cmd := exec.Command("truncate", "-s", fmt.Sprintf("%dG", sizeGB), diskPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("truncate disk: %s: %w", string(output), err)
+	}
+	// Expand filesystem to fill new size
+	cmd = exec.Command("resize2fs", "-f", diskPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("resize2fs: %s: %w", string(output), err)
+	}
+	return nil
+}
+
 // DeleteDisk removes a project's disk image.
-// Refuses to delete shared read-only base images regardless of caller.
 func DeleteDisk(projectName string) error {
 	return safeRemoveFile(projectName)
 }
@@ -121,6 +124,26 @@ func InjectInit(diskPath string) error {
 		return fmt.Errorf("chmod umut-init: %w", err)
 	}
 
+	return nil
+}
+
+// InjectHostname writes the given hostname into /etc/hostname on the disk image.
+func InjectHostname(diskPath, hostname string) error {
+	mountDir, err := os.MkdirTemp("", "umut-hostname-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(mountDir)
+
+	cmdMount := exec.Command("mount", diskPath, mountDir)
+	if output, err := cmdMount.CombinedOutput(); err != nil {
+		return fmt.Errorf("mount disk: %s: %w", string(output), err)
+	}
+	defer exec.Command("umount", mountDir).Run()
+
+	if err := os.WriteFile(filepath.Join(mountDir, "etc/hostname"), []byte(hostname+"\n"), 0644); err != nil {
+		return fmt.Errorf("write hostname: %w", err)
+	}
 	return nil
 }
 
@@ -186,155 +209,9 @@ func DeleteVolume(volumeName string) error {
 	return safeRemoveFile(volumeName)
 }
 
-// CreateUserDataDisk creates a small ext4 backing file for per-user writable storage
-// that is attached alongside a shared read-only root image. Returns the path to the .ext4 file.
-// If preallocated is true, fallocate is used to eagerly reserve disk blocks.
-func CreateUserDataDisk(diskName string, preallocated bool) (string, error) {
-	return createUserDataDisk(diskName, false, preallocated)
-}
-
-// CreateUserDataDiskSkipCheck creates a per-user data disk without disk space check.
-func CreateUserDataDiskSkipCheck(diskName string, preallocated bool) (string, error) {
-	return createUserDataDisk(diskName, true, preallocated)
-}
-
-func createUserDataDisk(diskName string, skipDiskCheck, preallocated bool) (string, error) {
-	volPath := filepath.Join(ImagesDir, diskName+".ext4")
-
-	if _, err := os.Stat(volPath); err == nil {
-		return volPath, nil
-	}
-
-	sizeBytes := int64(UserDataDiskSizeMB) * 1024 * 1024
-	if !skipDiskCheck {
-		if preallocated {
-			if err := CheckDiskSpace(ImagesDir, 0.90); err != nil {
-				return "", fmt.Errorf("preallocated user data disk %s would exceed disk threshold: %w", volPath, err)
-			}
-		} else {
-			if err := checkDiskSpace(volPath, sizeBytes); err != nil {
-				return "", err
-			}
-		}
-	}
-
-	if preallocated {
-		cmdAlloc := exec.Command("fallocate", "-l", fmt.Sprintf("%dM", UserDataDiskSizeMB), volPath)
-		if output, err := cmdAlloc.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("preallocate user data disk: %s: %w", string(output), err)
-		}
-	} else {
-		cmdAlloc := exec.Command("truncate", "-s", fmt.Sprintf("%dM", UserDataDiskSizeMB), volPath)
-		if output, err := cmdAlloc.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("allocate user data disk: %s: %w", string(output), err)
-		}
-	}
-
-	os.Chown(volPath, 1000, 1000)
-	os.Chmod(volPath, 0640)
-
-	cmdFormat := exec.Command("mkfs.ext4", "-F", volPath)
-	if output, err := cmdFormat.CombinedOutput(); err != nil {
-		os.Remove(volPath)
-		return "", fmt.Errorf("format user data disk: %s: %w", string(output), err)
-	}
-
-	return volPath, nil
-}
-
-// InjectSourceIntoDisk mounts an ext4 disk and copies source files from sourceDir into it.
-// Files are placed at the root of the disk (which maps to /workspace inside the VM).
-func InjectSourceIntoDisk(diskPath, sourceDir string) error {
-	mountDir, err := os.MkdirTemp("", "umut-inject-source-")
-	if err != nil {
-		return fmt.Errorf("create mount dir: %w", err)
-	}
-	defer os.RemoveAll(mountDir)
-
-	if out, err := exec.Command("mount", diskPath, mountDir).CombinedOutput(); err != nil {
-		return fmt.Errorf("mount disk: %s: %w", string(out), err)
-	}
-	defer exec.Command("umount", mountDir).Run()
-
-	// Copy all files from source directory to the disk root.
-	// Use rsync if available (excludes heavy dirs), otherwise fall back to cp.
-	if _, lookErr := exec.LookPath("rsync"); lookErr == nil {
-		cmd := exec.Command("rsync", "-a", "--exclude=.git", "--exclude=node_modules",
-			"--exclude=__pycache__", "--exclude=.cache", "--exclude=target",
-			"--exclude=venv", "--exclude=.venv", "--exclude=vendor",
-			"--exclude=go.sum", "--exclude=*.ext4", "--exclude=*.test",
-			sourceDir+"/", mountDir+"/")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("copy source (rsync): %s: %w", string(out), err)
-		}
-	} else {
-		cmd := exec.Command("cp", "-r", sourceDir+"/"+".", mountDir+"/")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("copy source: %s: %w", string(out), err)
-		}
-	}
-
-	return nil
-}
-
-// CopyDiskContents mounts both source and target ext4 disks and copies all files
-// from the source root to the target root. Used for restoring ephemeral VM state
-// from Storage Box to local NVMe.
-func CopyDiskContents(sourceDiskPath, targetDiskPath string) error {
-	srcMount, err := os.MkdirTemp("", "umut-copy-src-")
-	if err != nil {
-		return fmt.Errorf("create src mount dir: %w", err)
-	}
-	defer os.RemoveAll(srcMount)
-
-	dstMount, err := os.MkdirTemp("", "umut-copy-dst-")
-	if err != nil {
-		return fmt.Errorf("create dst mount dir: %w", err)
-	}
-	defer os.RemoveAll(dstMount)
-
-	if out, err := exec.Command("mount", sourceDiskPath, srcMount).CombinedOutput(); err != nil {
-		return fmt.Errorf("mount source: %s: %w", string(out), err)
-	}
-	defer exec.Command("umount", srcMount).Run()
-
-	if out, err := exec.Command("mount", targetDiskPath, dstMount).CombinedOutput(); err != nil {
-		return fmt.Errorf("mount target: %s: %w", string(out), err)
-	}
-	defer exec.Command("umount", dstMount).Run()
-
-	cmd := exec.Command("cp", "-r", srcMount+"/.", dstMount+"/")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("copy disk contents: %s: %w", string(out), err)
-	}
-
-	return nil
-}
-
-// DeleteUserDataDisk removes a per-user data disk.
-func DeleteUserDataDisk(diskName string) error {
-	return safeRemoveFile(diskName)
-}
-
-// IsSharedBaseImage returns true if the disk name matches a shared read-only base image.
-// Uses dynamic suffix matching: any name ending in "-base" (including the bare "base")
-// is a shared base image. This automatically protects future runtimes.
-func IsSharedBaseImage(diskName string) bool {
-	base := filepath.Base(diskName)
-	return base == "base" || strings.HasSuffix(base, "-base")
-}
-
-// safeRemoveFile removes a single .ext4 file inside ImagesDir. It refuses to:
-//   - Delete the ImagesDir directory itself
-//   - Delete any shared base image (*-base.ext4)
 func safeRemoveFile(diskName string) error {
-	if IsSharedBaseImage(diskName) {
-		return fmt.Errorf("refusing to delete shared base image %q", diskName)
-	}
-
 	diskPath := filepath.Join(ImagesDir, diskName+".ext4")
 
-	// Final safety net: ensure we're deleting a file inside ImagesDir, not the directory itself
 	if filepath.Clean(diskPath) == filepath.Clean(ImagesDir) {
 		return fmt.Errorf("CRITICAL BUG: attempting to delete ImagesDir itself (%s) — blocked", diskPath)
 	}
@@ -343,7 +220,6 @@ func safeRemoveFile(diskName string) error {
 		return nil
 	}
 
-	log.Printf("[storage] removing: %s\n", diskPath)
 	if err := os.Remove(diskPath); err != nil {
 		return fmt.Errorf("delete %s: %w", diskPath, err)
 	}

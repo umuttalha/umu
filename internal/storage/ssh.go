@@ -47,8 +47,7 @@ func InjectDropbearSources(diskPath string) error {
 
 // GenerateDropbearHostKey generates an ED25519 host key for the VM.
 // The key is generated on the host using the host's dropbearkey binary,
-// then copied into the mounted VM rootfs. This avoids glibc mismatch issues
-// when running dropbearkey inside the VM's chroot.
+// then copied into the mounted VM rootfs.
 func GenerateDropbearHostKey(diskPath string) error {
 	mountDir, err := os.MkdirTemp("", "umut-sshkey-")
 	if err != nil {
@@ -88,6 +87,74 @@ func GenerateDropbearHostKey(diskPath string) error {
 	}
 	if err := os.WriteFile(keyDst, keyData, 0600); err != nil {
 		return fmt.Errorf("write host key: %w", err)
+	}
+
+	return nil
+}
+
+// GenerateOrReuseDropbearHostKey generates a host key for the VM, reusing a
+// previously generated key if one exists in /var/lib/umut/ssh-keys/{project}/.
+func GenerateOrReuseDropbearHostKey(projectName, diskPath string) error {
+	dataDir := os.Getenv("UMUT_DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/var/lib/umut"
+	}
+	keyDir := filepath.Join(dataDir, "ssh-keys", projectName)
+	keyPath := filepath.Join(keyDir, "dropbear_ed25519_host_key")
+
+	// If a key already exists for this project, reuse it
+	if existingKey, err := os.ReadFile(keyPath); err == nil {
+		mountDir, err := os.MkdirTemp("", "umut-sshkey-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(mountDir)
+
+		cmdMount := exec.Command("mount", diskPath, mountDir)
+		if output, err := cmdMount.CombinedOutput(); err != nil {
+			return fmt.Errorf("mount disk for ssh key: %s: %w", string(output), err)
+		}
+		defer func() {
+			exec.Command("umount", mountDir).Run()
+		}()
+
+		keyDst := filepath.Join(mountDir, "etc/dropbear/dropbear_ed25519_host_key")
+		os.MkdirAll(filepath.Dir(keyDst), 0700)
+		if err := os.WriteFile(keyDst, existingKey, 0600); err != nil {
+			return fmt.Errorf("write host key: %w", err)
+		}
+		return nil
+	}
+
+	// Generate a new key
+	if err := GenerateDropbearHostKey(diskPath); err != nil {
+		return err
+	}
+
+	// Save the generated key for future reuse
+	os.MkdirAll(keyDir, 0700)
+
+	mountDir, err := os.MkdirTemp("", "umut-sshkey-save-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(mountDir)
+
+	cmdMount := exec.Command("mount", diskPath, mountDir)
+	if output, err := cmdMount.CombinedOutput(); err != nil {
+		return fmt.Errorf("mount disk for ssh key save: %s: %w", string(output), err)
+	}
+	defer func() {
+		exec.Command("umount", mountDir).Run()
+	}()
+
+	keySrc := filepath.Join(mountDir, "etc/dropbear/dropbear_ed25519_host_key")
+	keyData, err := os.ReadFile(keySrc)
+	if err != nil {
+		return fmt.Errorf("read generated host key: %w", err)
+	}
+	if err := os.WriteFile(keyPath, keyData, 0600); err != nil {
+		return fmt.Errorf("save host key: %w", err)
 	}
 
 	return nil

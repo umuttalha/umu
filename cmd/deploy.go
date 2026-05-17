@@ -2,67 +2,50 @@ package cmd
 
 import (
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/umuttalha/umut/internal/compute"
 	"github.com/umuttalha/umut/internal/config"
-	"github.com/umuttalha/umut/internal/deps"
-	"github.com/umuttalha/umut/internal/health"
 	"github.com/umuttalha/umut/internal/metadata"
 	"github.com/umuttalha/umut/internal/network"
 	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
-	"github.com/umuttalha/umut/internal/runtime"
-	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/state"
 	"github.com/umuttalha/umut/internal/storage"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
-	deployCPUs          int
-	deployMemory        int
-	deployPort          int
-	deployAlwaysOn      bool
-	deployIOBandwidth   int64
-	deployPidsMax       int
-	deploySkipDiskCheck bool
+	deployCPUs    int
+	deployMemory  int
+	deployDisk    int
+	deployPort    int
+	deploySSHKey  string
+	deployExpose  bool
 )
 
 var deployCmd = &cobra.Command{
 	Use:   "deploy <project-name>",
-	Short: "Deploy a new project into a Firecracker microVM",
-	Long: `Deploy creates a new isolated Multi-VM VPC for the given project.
-
-This command parses your umut.toml and will:
-  1. Create a dedicated Linux Bridge for the project's VPC
-  2. For each defined service, either clone the base disk or run the Ephemeral Builder
-  3. Create TAP interfaces and assign internal IP addresses
-  4. Start Firecracker microVMs with internal DNS resolution via /etc/hosts
-  5. Enforce CPU and memory limits per VM via cgroups v2
-  6. Configure Caddy to route external traffic to exposed services
+	Short: "Deploy a new VM",
+	Long: `Deploy creates a new Firecracker microVM with a cloned Ubuntu rootfs.
 
 Example:
-  umut deploy myproject
-  umut deploy blog.umut.space`,
+  umut deploy myserver
+  umut deploy myapp --cpus 2 --memory 4096 --disk 20
+  umut deploy blog.umut.space --ssh-key ~/.ssh/mykey.pub`,
 	Args: cobra.ExactArgs(1),
 	RunE: runDeploy,
 }
 
 func init() {
-	deployCmd.Flags().IntVar(&deployCPUs, "cpus", 0, "number of vCPUs (overrides umut.toml)")
-	deployCmd.Flags().IntVar(&deployMemory, "memory", 0, "memory in MB (overrides umut.toml)")
-	deployCmd.Flags().IntVar(&deployPort, "port", 0, "target port inside the VM (default: runtime-specific)")
-	deployCmd.Flags().BoolVar(&deployAlwaysOn, "always-on", false, "disable scale-to-zero for this project")
-	deployCmd.Flags().Int64Var(&deployIOBandwidth, "io-bandwidth", 0, "per-VM I/O bandwidth in bytes/sec (0 = default 100MB/s)")
-	deployCmd.Flags().IntVar(&deployPidsMax, "pids-max", 0, "per-VM PID limit (0 = default 4096)")
-	deployCmd.Flags().BoolVar(&deploySkipDiskCheck, "skip-disk-check", false, "skip pre-flight disk space check (F-07)")
+	deployCmd.Flags().IntVar(&deployCPUs, "cpus", 1, "number of vCPUs")
+	deployCmd.Flags().IntVar(&deployMemory, "memory", 256, "memory in MB")
+	deployCmd.Flags().IntVar(&deployDisk, "disk", 10, "disk size in GB")
+	deployCmd.Flags().IntVar(&deployPort, "port", 0, "target port inside the VM for HTTP routing (0 = no routing)")
+	deployCmd.Flags().StringVar(&deploySSHKey, "ssh-key", "", "path to SSH public key for VM access")
+	deployCmd.Flags().BoolVar(&deployExpose, "expose", false, "expose the VM via Caddy reverse proxy")
 	rootCmd.AddCommand(deployCmd)
 }
 
@@ -80,16 +63,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		fmt.Printf("  warning: failed to load umut.toml: %v\n", err)
 	}
-	cfg.MergeCLI(deployCPUs, deployMemory, deployAlwaysOn)
-
-	// Resolve service port: CLI flag takes precedence, else use runtime default
-	servicePort := deployPort
-	if servicePort == 0 {
-		if len(cfg.Services) == 0 {
-			return fmt.Errorf("no services defined in umut.toml")
-		}
-		servicePort = config.RuntimeDefaultPort(cfg.Services[0].Runtime)
-	}
+	cfg.MergeCLI(deployCPUs, deployMemory)
 
 	// Load state
 	store, err := state.NewStore()
@@ -97,444 +71,155 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	// R-16: Verify base rootfs image checksums before deployment
-	if err := storage.VerifyRootfsChecksum(filepath.Join(storage.ImagesDir, "base.ext4")); err != nil {
-		fmt.Printf("  warning: base image checksum verification: %v (run 'umut checksum regenerate' to fix)\n", err)
-	}
-
-	// Check if project already exists — perform rolling update
+	// Check if project already exists
 	if existing, exists := store.Get(projectName); exists {
-		if existing.Status == state.StatusCreating {
-			return fmt.Errorf("project %q is in a broken state (creating) — run 'umut destroy %s' first", projectName, projectName)
-		}
-		return runRollingUpdate(existing, cfg, store, cwd, servicePort)
+		return fmt.Errorf("project %q already exists (status=%s) — run 'umut destroy %s' first", projectName, existing.Status, projectName)
 	}
 
-	fmt.Printf("  Deploying %s (%d services)\n", projectName, len(cfg.Services))
+	fmt.Printf("  Deploying %s\n", projectName)
 
 	project := &state.Project{
 		Name:      projectName,
 		Status:    state.StatusCreating,
-		Runtime:   cfg.Services[0].Runtime,
 		Services:  []*state.Service{},
 		CreatedAt: time.Now(),
 	}
 
-	// Atomically register the project and get a unique index.
-	// This prevents parallel deploys from colliding on the same guest IP.
+	// Atomically register the project and get a unique index
 	projectIndex, err := store.Register(project)
 	if err != nil {
 		return fmt.Errorf("register project: %w", err)
 	}
 
-	// --- Phase 1: Pre-allocate IPs, MACs, TAP names ---
-	type servicePlan struct {
-		sCfg     config.ServiceConfig
-		guestIP  string
-		globalIP string
-		mac      string
-		tapName  string
-	}
+	guestIP := network.AllocateGuestIP(projectIndex, 0)
 	globalIP := network.AllocateGuestGlobalIP(projectIndex)
+	mac := network.GenerateMAC(projectIndex, 0)
+	tapName := network.TapName(projectName, "main", 0)
 
-	plans := make([]servicePlan, len(cfg.Services))
-	for i := range cfg.Services {
-		plans[i] = servicePlan{
-			sCfg:     cfg.Services[i],
-			guestIP:  network.AllocateGuestIP(projectIndex, i),
-			globalIP: globalIP,
-			mac:      network.GenerateMAC(projectIndex, i),
-			tapName:  network.TapName(projectName, cfg.Services[i].Name, 0),
+	fmt.Printf("  ● Setting up network...")
+	network.DestroyTAP(tapName)
+	if _, err := network.CreateVMTAP(tapName); err != nil {
+		return fmt.Errorf("create tap: %w", err)
+	}
+	fmt.Printf(" done (%s)\n", guestIP)
+
+	// --- Disk creation ---
+	fmt.Printf("  ● Creating disk...")
+	diskPath, err := storage.CloneDisk(projectName)
+	if err != nil {
+		network.DestroyTAP(tapName)
+		return fmt.Errorf("clone disk: %w", err)
+	}
+
+	// Resize disk to user-specified size
+	if deployDisk > 0 {
+		if err := storage.ResizeDisk(diskPath, deployDisk); err != nil {
+			network.DestroyTAP(tapName)
+			storage.DeleteDisk(projectName)
+			return fmt.Errorf("resize disk: %w", err)
 		}
 	}
 
-	// Build hosts mapping once all IPs are known
-	var hostsMapping []string
-	for _, p := range plans {
-		hostsMapping = append(hostsMapping, fmt.Sprintf("%s:%s", p.guestIP, p.sCfg.Name))
-	}
-	hostsString := strings.Join(hostsMapping, ",")
-
-	if cfg.Services[0].Runtime == "quickwit" {
-		s3Cfg := config.GlobalS3Config()
-		if s3Cfg.Endpoint != "" {
-			hostsString = appendResolvedHosts(hostsString, s3Cfg.Endpoint)
-			if s3Cfg.Bucket != "" {
-				bucketHost := s3Cfg.Bucket + "." + extractHostname(s3Cfg.Endpoint)
-				hostsString = appendMappedHost(hostsString, s3Cfg.Endpoint, bucketHost)
-			}
-		}
-		hostsString = appendResolvedHosts(hostsString, "https://telemetry.quickwit.io")
+	// Inject umut-init as PID 1
+	if err := storage.InjectInit(diskPath); err != nil {
+		network.DestroyTAP(tapName)
+		storage.DeleteDisk(projectName)
+		return fmt.Errorf("inject init: %w", err)
 	}
 
-// Validate pip dependencies against shared base manifest (per-service)
-	for _, sCfg := range cfg.Services {
-		if !storage.SharedRootExists(sCfg.Runtime) {
-			continue
+	// Inject SSH (dropbear + host keys + authorized_keys)
+	if err := storage.InjectDropbearSources(diskPath); err != nil {
+		fmt.Printf("\n  warning: SSH dropbear injection failed: %v\n", err)
+	} else {
+		// Generate or reuse persistent host key
+		if err := storage.GenerateOrReuseDropbearHostKey(projectName, diskPath); err != nil {
+			fmt.Printf("\n  warning: SSH host key generation failed: %v\n", err)
 		}
-		reqPath := filepath.Join(cwd, sCfg.BuildDir, "requirements.txt")
-		if _, err := os.Stat(reqPath); err == nil {
-			missing, err := deps.CheckFromBase(reqPath, storage.GetSharedRootImage(sCfg.Runtime))
-			if err != nil {
-				fmt.Printf("  warning: dependency check failed: %v\n", err)
-			} else if len(missing) > 0 {
-				fmt.Printf("  warning: %d package(s) not in shared base, will be installed at boot:\n", len(missing))
-				for _, pkg := range missing {
-					fmt.Printf("    - %s\n", pkg)
-				}
-			}
+		// Inject authorized keys
+		if err := injectSSHAuthorizedKeys(diskPath, deploySSHKey); err != nil {
+			fmt.Printf("\n  warning: SSH authorized_keys injection failed: %v\n", err)
 		}
 	}
+	// Inject hostname
+	if err := storage.InjectHostname(diskPath, projectName); err != nil {
+		fmt.Printf("\n  warning: hostname injection failed: %v\n", err)
+	}
+	fmt.Printf(" done\n")
 
-	// Per-service deploy state accumulated across phases
-	type deployState struct {
-		diskPath     string
-		rootReadOnly bool
-		userDataDisk string
-		volumes      []string
-		mergedEnv    map[string]string
-		svcState     *state.Service
-		err          error
+	// --- VM start ---
+	svcState := &state.Service{
+		Name:        "main",
+		VCPUs:       deployCPUs,
+		MemoryMB:    deployMemory,
+		Expose:      deployExpose || deployPort > 0,
+		Version:     1,
+		TAPDevice:   tapName,
+		GuestIP:     guestIP,
+		GlobalIP:    globalIP,
+		MACAddress:  mac,
+		ServicePort: deployPort,
+		DiskPath:    diskPath,
 	}
 
-	states := make([]deployState, len(plans))
+	if deployCPUs == 0 {
+		deployCPUs = 1
+	}
+	if deployMemory == 0 {
+		deployMemory = 256
+	}
 
-	setupServiceDisk := func(p servicePlan) deployState {
-		sCfg := p.sCfg
-		serviceDir := filepath.Join(cwd, sCfg.BuildDir)
-		st := deployState{}
+	fmt.Printf("  ● Starting microVM (cpus=%d, mem=%dMB)...", deployCPUs, deployMemory)
+	vmCfg := compute.DefaultConfig(
+		fmt.Sprintf("%s-main", projectName),
+		diskPath,
+		tapName,
+		guestIP,
+		mac,
+	)
+	vmCfg.GuestGlobalIP = globalIP
+	vmCfg.VCPUs = deployCPUs
+	vmCfg.MemoryMB = deployMemory
+	vmCfg.HostsMapping = fmt.Sprintf("%s:main", guestIP)
 
-		if storage.SharedRootExists(sCfg.Runtime) {
-			var dataDiskPath string
+	// Build metadata JSON for HTTP metadata service
+	if mdJSON, mdErr := compute.BuildMetadataJSON(vmCfg, nil); mdErr == nil {
+		vmCfg.MetadataJSON = mdJSON
+	}
 
-			dataDiskName := fmt.Sprintf("data-%s-%s", projectName, sCfg.Name)
-			var err error
-			if deploySkipDiskCheck {
-				dataDiskPath, err = storage.CreateUserDataDiskSkipCheck(dataDiskName, sCfg.PreallocatedVolumes)
-			} else {
-				dataDiskPath, err = storage.CreateUserDataDisk(dataDiskName, sCfg.PreallocatedVolumes)
-			}
-			if err != nil {
-				st.err = fmt.Errorf("create data disk: %w", err)
-				return st
-			}
-			st.diskPath = storage.GetSharedRootImage(sCfg.Runtime)
-			st.rootReadOnly = true
-			st.userDataDisk = dataDiskPath
+	// Register metadata with HTTP registry before starting VM
+	metadata.EnsureRunning()
+	if len(vmCfg.MetadataJSON) > 0 {
+		metadata.Register(guestIP, vmCfg.MetadataJSON)
+	}
 
-			if err := storage.InjectInit(dataDiskPath); err != nil {
-				fmt.Printf("\n  warning: failed to inject init: %v\n", err)
-			}
+	vm, err := compute.StartVM(vmCfg)
+	if err != nil {
+		metadata.Deregister(guestIP)
+		network.DestroyTAP(tapName)
+		storage.DeleteDisk(projectName)
+		return fmt.Errorf("start VM: %w", err)
+	}
+	svcState.PID = vm.PID
+	svcState.SocketPath = vm.Config.SocketPath
+	fmt.Printf(" done\n")
 
-			if err := storage.InjectSourceIntoDisk(dataDiskPath, serviceDir); err != nil {
-				fmt.Printf("\n  warning: failed to inject source code: %v\n", err)
-			}
+	// Setup NDP proxy for direct IPv6 SSH access
+	if globalIP != "" {
+		if err := network.SetupNDPProxy(globalIP); err != nil {
+			fmt.Printf(" warning: NDP proxy setup failed for %s: %v\n", globalIP, err)
+		}
+	}
 
+	project.Services = append(project.Services, svcState)
+
+	// Configure Caddy route if exposed
+	if svcState.Expose && deployPort > 0 {
+		fmt.Printf("  ● Configuring proxy...")
+		routeHostname := proj.RouteHostname(projectName, "main")
+		if err := routing.AddRoute(routeHostname, svcState.GuestIP, deployPort); err != nil {
+			fmt.Printf(" warning: caddy route failed: %v\n", err)
 		} else {
-			var err error
-			st.diskPath, err = storage.CloneDisk(fmt.Sprintf("%s-%s", projectName, sCfg.Name))
-			if err != nil {
-				st.err = fmt.Errorf("clone disk: %w", err)
-				return st
-			}
-			if err := storage.InjectInit(st.diskPath); err != nil {
-				st.err = fmt.Errorf("inject init: %w", err)
-				return st
-			}
-			if err := storage.InjectSourceIntoDisk(st.diskPath, serviceDir); err != nil {
-				fmt.Printf("\n  warning: failed to inject source code: %v\n", err)
-			}
-
-			// Inject SSH (dropbear + host keys + authorized_keys)
-			if err := storage.InjectDropbearSources(st.diskPath); err != nil {
-				fmt.Printf("\n  warning: SSH dropbear injection failed: %v\n", err)
-			} else if err := storage.GenerateDropbearHostKey(st.diskPath); err != nil {
-				fmt.Printf("\n  warning: SSH host key generation failed: %v\n", err)
-			}
-			injectSSHAuthorizedKeys(st.diskPath)
-		}
-
-		mergedEnv, err := MergeEnv(projectName, sCfg.Env)
-		if err != nil {
-			fmt.Printf(" warning: failed to merge env vars: %v\n", err)
-		} else if len(mergedEnv) > 0 {
-			targetDisk := st.diskPath
-			if st.userDataDisk != "" {
-				targetDisk = st.userDataDisk
-			}
-			if err := storage.InjectSecrets(targetDisk, mergedEnv); err != nil {
-				fmt.Printf(" warning: failed to inject secrets onto disk: %v\n", err)
-			}
-		}
-		st.mergedEnv = mergedEnv
-
-		if sCfg.Runtime == "quickwit" {
-			s3Cfg := config.GlobalS3Config()
-			qwConfig, qwErr := runtime.QuickwitConfig(s3Cfg.Endpoint, s3Cfg.Region, s3Cfg.Bucket, projectName)
-			if qwErr != nil {
-				st.err = fmt.Errorf("quickwit config: %w", qwErr)
-				return st
-			}
-			targetDisk := st.diskPath
-			if st.userDataDisk != "" {
-				targetDisk = st.userDataDisk
-			}
-			if err := injectConfigFile(targetDisk, "quickwit.yaml", qwConfig); err != nil {
-				st.err = fmt.Errorf("inject quickwit config: %w", err)
-				return st
-			}
-			if s3Cfg.AccessKeyID != "" && s3Cfg.SecretAccessKey != "" {
-				if st.mergedEnv == nil {
-					st.mergedEnv = make(map[string]string)
-				}
-				st.mergedEnv["AWS_ACCESS_KEY_ID"] = s3Cfg.AccessKeyID
-				st.mergedEnv["AWS_SECRET_ACCESS_KEY"] = s3Cfg.SecretAccessKey
-				st.mergedEnv["QW_DISABLE_TELEMETRY"] = "1"
-				if st.userDataDisk != "" {
-					storage.InjectSecrets(st.userDataDisk, st.mergedEnv)
-				}
-			}
-		}
-
-		if len(sCfg.Volumes) > 0 {
-			for vIdx := range sCfg.Volumes {
-				volName := fmt.Sprintf("vol-%s-%s-%d", projectName, sCfg.Name, vIdx)
-				var volFile string
-				var volErr error
-				if deploySkipDiskCheck {
-					volFile, volErr = storage.CreateVolumeSkipCheck(volName, 1, sCfg.PreallocatedVolumes)
-				} else {
-					volFile, volErr = storage.CreateVolume(volName, 1, sCfg.PreallocatedVolumes)
-				}
-				if volErr != nil {
-					st.err = fmt.Errorf("create volume %s: %w", volName, volErr)
-					break
-				}
-				st.volumes = append(st.volumes, volFile)
-			}
-		}
-
-		return st
-	}
-
-	// --- Phase 2: Parallel disk + TAP creation ---
-	if len(plans) == 1 {
-		i := 0
-		sCfg := plans[i].sCfg
-
-		fmt.Printf("\n  [Service: %s]\n", sCfg.Name)
-		fmt.Printf("  ● Setting up network...")
-		network.DestroyTAP(plans[i].tapName)
-		if _, err := network.CreateVMTAP(plans[i].tapName); err != nil {
-			return fmt.Errorf("create tap: %w", err)
-		}
-		fmt.Printf(" done (%s)\n", plans[i].guestIP)
-
-		states[i] = setupServiceDisk(plans[i])
-	} else {
-		fmt.Printf("  ● Setting up network and storage for %d services in parallel...\n", len(plans))
-		g := new(errgroup.Group)
-		for i := range plans {
-			i := i
-			g.Go(func() error {
-				sCfg := plans[i].sCfg
-
-				network.DestroyTAP(plans[i].tapName)
-				if _, err := network.CreateVMTAP(plans[i].tapName); err != nil {
-					return fmt.Errorf("service %s: create tap: %w", sCfg.Name, err)
-				}
-
-				states[i] = setupServiceDisk(plans[i])
-				if states[i].err != nil {
-					return fmt.Errorf("service %s: %w", sCfg.Name, states[i].err)
-				}
-
-				fmt.Printf("  ● [%s] TAP ready (%s), disk ready\n", sCfg.Name, plans[i].guestIP)
-				return nil
-			})
-		}
-		if err := g.Wait(); err != nil {
-			for _, p := range plans {
-				network.DestroyTAP(p.tapName)
-			}
-			project.Status = state.StatusError
-			store.Save(project)
-			return err
-		}
-		fmt.Printf("  ● All services: network and storage ready\n")
-	}
-
-	// --- Phase 3: Serial VM start ---
-	for i := range plans {
-		sCfg := plans[i].sCfg
-		st := states[i]
-
-		if st.err != nil {
-			continue
-		}
-
-		if len(plans) > 1 {
-			fmt.Printf("\n  [Service: %s]\n", sCfg.Name)
-		}
-
-		svcState := &state.Service{
-			Name:         sCfg.Name,
-			MemoryMB:     sCfg.MemoryMB,
-			AlwaysOn:     sCfg.AlwaysOn,
-			Ephemeral:    !sCfg.AlwaysOn && len(sCfg.Volumes) == 0,
-			Expose:       sCfg.Expose,
-			Version:      1,
-			TAPDevice:    plans[i].tapName,
-			GuestIP:      plans[i].guestIP,
-			GlobalIP:     plans[i].globalIP,
-			MACAddress:   plans[i].mac,
-			ServicePort:  servicePort,
-			DiskPath:     st.diskPath,
-			RootReadOnly: st.rootReadOnly,
-			UserDataDisk: st.userDataDisk,
-		}
-
-		fmt.Printf("  ● Starting microVM (cpus=%d, mem=%dMB)...", sCfg.VCPUs, sCfg.MemoryMB)
-		vmCfg := compute.DefaultConfig(
-			fmt.Sprintf("%s-%s", projectName, sCfg.Name),
-			st.diskPath,
-			plans[i].tapName,
-			plans[i].guestIP,
-			plans[i].mac,
-		)
-		vmCfg.GuestGlobalIP = plans[i].globalIP
-		vmCfg.VCPUs = sCfg.VCPUs
-		vmCfg.MemoryMB = sCfg.MemoryMB
-		vmCfg.RootReadOnly = st.rootReadOnly
-		vmCfg.HostsMapping = hostsString
-		vmCfg.IOBandwidthBps = deployIOBandwidth
-		vmCfg.PidsMax = deployPidsMax
-		vmCfg.SkipDiskCheck = deploySkipDiskCheck
-		vmCfg.Mode = sCfg.Mode
-
-		// Build metadata JSON for HTTP metadata service
-		if mdJSON, mdErr := compute.BuildMetadataJSON(vmCfg, st.mergedEnv); mdErr == nil {
-			vmCfg.MetadataJSON = mdJSON
-		}
-
-		// Setup drives: user data disk (if present) + persistent volumes
-		{
-			var extraDrives []string
-			var volsMapping []string
-
-			volDevOffset := 0
-			if st.userDataDisk != "" {
-				extraDrives = append(extraDrives, st.userDataDisk)
-				volsMapping = append(volsMapping, fmt.Sprintf("/dev/vdb:%s", compute.UserDataMount))
-				volDevOffset = 1
-			}
-
-			if len(st.volumes) > 0 {
-				fmt.Printf("\n  ● Attached %d volume(s)", len(st.volumes))
-			}
-			for vIdx, volFile := range st.volumes {
-				extraDrives = append(extraDrives, volFile)
-				svcState.Volumes = append(svcState.Volumes, volFile)
-				devName := fmt.Sprintf("/dev/vd%c", byte('b'+vIdx+volDevOffset))
-				mountPath := sCfg.Volumes[vIdx]
-				volsMapping = append(volsMapping, fmt.Sprintf("%s:%s", devName, mountPath))
-			}
-			vmCfg.ExtraDrives = extraDrives
-			if len(volsMapping) > 0 {
-				vmCfg.VolumesMapping = strings.Join(volsMapping, ",")
-			}
-		}
-
-		// Capture kernel args for scale-to-zero wake-up
-		var kerr error
-		svcState.KernelArgs, kerr = compute.BuildKernelArgs(vmCfg)
-		if kerr != nil {
-			return fmt.Errorf("kernel args too long for service %s: %w", sCfg.Name, kerr)
-		}
-
-		// Register metadata with HTTP registry before starting VM
-		metadata.EnsureRunning()
-		if len(vmCfg.MetadataJSON) > 0 {
-			metadata.Register(plans[i].guestIP, vmCfg.MetadataJSON)
-		}
-
-		vm, err := compute.StartVM(vmCfg)
-		if err != nil {
-			metadata.Deregister(plans[i].guestIP)
-			return fmt.Errorf("start VM: %w", err)
-		}
-		svcState.PID = vm.PID
-		svcState.SocketPath = vm.Config.SocketPath
-		fmt.Printf(" done\n")
-
-		// Setup NDP proxy for direct IPv6 SSH access
-		if plans[i].globalIP != "" {
-			if err := network.SetupNDPProxy(plans[i].globalIP); err != nil {
-				fmt.Printf(" warning: NDP proxy setup failed for %s: %v\n", plans[i].globalIP, err)
-			}
-		}
-
-		states[i].svcState = svcState
-	}
-
-	// --- Phase 4: Serial route configuration (do NOT wait for health check) ---
-	for i := range plans {
-		svcState := states[i].svcState
-		if svcState == nil {
-			continue
-		}
-
-		if plans[i].sCfg.Expose {
-			fmt.Printf("  ● Configuring proxy...")
-			routeHostname := proj.RouteHostname(projectName, plans[i].sCfg.Name)
-			if plans[i].sCfg.AlwaysOn {
-				if err := routing.AddRoute(routeHostname, svcState.GuestIP, servicePort); err != nil {
-					fmt.Printf(" warning: caddy route failed: %v\n", err)
-				}
-			} else {
-				if err := routing.AddRoute(routeHostname, "127.0.0.1", scaletozero.DefaultProxyPort); err != nil {
-					fmt.Printf(" warning: caddy route failed: %v\n", err)
-				}
-			}
 			fmt.Printf(" exposed at %s\n", routeHostname)
-		}
-
-		project.Services = append(project.Services, svcState)
-	}
-
-	// --- Phase 5: Async health checks (non-blocking) ---
-	if len(plans) > 1 {
-		g := new(errgroup.Group)
-		for i := range plans {
-			i := i
-			if !plans[i].sCfg.Expose {
-				continue
-			}
-			g.Go(func() error {
-				path := health.HealthPathForRuntime(plans[i].sCfg.Runtime)
-				return health.CheckWithPath(plans[i].guestIP, servicePort, path, 30*time.Second, 100*time.Millisecond)
-			})
-		}
-		go func() {
-			if err := g.Wait(); err != nil {
-				fmt.Printf("  warning: health check: %v\n", err)
-			} else {
-				fmt.Println("  ● Health checks: OK")
-			}
-		}()
-	} else {
-		for i := range plans {
-			if plans[i].sCfg.Expose {
-				i := i
-				go func() {
-					path := health.HealthPathForRuntime(plans[i].sCfg.Runtime)
-					if err := health.CheckWithPath(plans[i].guestIP, servicePort, path, 30*time.Second, 100*time.Millisecond); err != nil {
-						fmt.Printf("  health check: warning: %v\n", err)
-					} else {
-						fmt.Printf("  ● Health check: OK\n")
-					}
-				}()
-			}
 		}
 	}
 
@@ -545,491 +230,41 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	elapsed := time.Since(start)
-
 	fmt.Println()
 	fmt.Printf("  ✓ Ready  %s  (%s)\n", projectName, elapsed.Round(time.Millisecond))
+	fmt.Printf("  → SSH:  ssh root@%s\n", globalIP)
+	if svcState.Expose && deployPort > 0 {
+		fmt.Printf("  → HTTP: %s\n", proj.RouteHostname(projectName, "main"))
+	}
 
 	return nil
 }
 
-func runRollingUpdate(existing *state.Project, cfg config.UmutConfig, store *state.Store, cwd string, servicePort int) error {
-	start := time.Now()
-
-	projectIndex := extractProjectIndexFromServices(existing)
-
-	fmt.Printf("  Upgrading %s (rolling update)\n", existing.Name)
-
-	buildHostsMapping := func(updatingServiceName string, updatingGuestIP string) string {
-		var entries []string
-		for i, sCfg := range cfg.Services {
-			if sCfg.Name == updatingServiceName {
-				entries = append(entries, fmt.Sprintf("%s:%s", updatingGuestIP, sCfg.Name))
-			} else {
-				for _, oldSvc := range existing.Services {
-					if oldSvc.Name == sCfg.Name {
-						entries = append(entries, fmt.Sprintf("%s:%s", oldSvc.GuestIP, sCfg.Name))
-						break
-					}
-				}
-				if len(entries) <= i {
-					freshIP := network.AllocateGuestIP(projectIndex, i)
-					entries = append(entries, fmt.Sprintf("%s:%s", freshIP, sCfg.Name))
-				}
-			}
-		}
-		return strings.Join(entries, ",")
+func injectSSHAuthorizedKeys(diskPath string, keyPath string) error {
+	// Priority: CLI flag > ~/.umut/ssh_key > ~/.ssh/id_ed25519.pub > ~/.ssh/id_rsa.pub
+	paths := []string{}
+	if keyPath != "" {
+		paths = append(paths, keyPath)
+	}
+	home := os.Getenv("HOME")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	if home != "" {
+		paths = append(paths, filepath.Join(home, ".umut", "ssh_key"))
+		paths = append(paths, filepath.Join(home, ".ssh", "id_ed25519.pub"))
+		paths = append(paths, filepath.Join(home, ".ssh", "id_rsa.pub"))
 	}
 
-	for i, sCfg := range cfg.Services {
-		fmt.Printf("\n  [Service: %s]\n", sCfg.Name)
-
-		var oldSvc *state.Service
-		for _, svc := range existing.Services {
-			if svc.Name == sCfg.Name {
-				oldSvc = svc
-				break
-			}
-		}
-
-		newVersion := 1
-		if oldSvc != nil {
-			newVersion = oldSvc.Version + 1
-		}
-		versionedName := fmt.Sprintf("%s-%s-v%d", existing.Name, sCfg.Name, newVersion)
-		var svcVols []string
-
-		var diskPath string
-		var err error
-		var rootReadOnly bool
-		var userDataDisk string
-
-		// Allocate IP/MAC and create TAP
-		guestIP := network.AllocateGuestIP(projectIndex, newVersion*10+i)
-		mac := network.GenerateMAC(projectIndex, newVersion*10+i)
-		tapName := network.TapName(existing.Name, sCfg.Name, newVersion)
-
-		fmt.Printf("  ● Setting up network...")
-		network.DestroyTAP(tapName)
-		if _, err := network.CreateVMTAP(tapName); err != nil {
-			return fmt.Errorf("create tap: %w", err)
-		}
-		fmt.Printf(" done (%s)\n", guestIP)
-
-		if storage.SharedRootExists(sCfg.Runtime) {
-			var dataDiskPath string
-
-			fmt.Printf("  ● Using shared read-only root + user data disk...")
-			sharedRootPath := storage.GetSharedRootImage(sCfg.Runtime)
-			if err := storage.VerifyRootfsChecksum(sharedRootPath); err != nil {
-				fmt.Printf("\n  warning: shared root image checksum: %v (run 'umut checksum regenerate' to fix)\n", err)
-			}
-			diskPath = sharedRootPath
-			rootReadOnly = true
-
-			dataDiskName := fmt.Sprintf("data-%s", versionedName)
-			if deploySkipDiskCheck {
-				dataDiskPath, err = storage.CreateUserDataDiskSkipCheck(dataDiskName, sCfg.PreallocatedVolumes)
-			} else {
-				dataDiskPath, err = storage.CreateUserDataDisk(dataDiskName, sCfg.PreallocatedVolumes)
-			}
-			if err != nil {
-				return fmt.Errorf("create data disk: %w", err)
-			}
-			userDataDisk = dataDiskPath
-			fmt.Printf(" done\n")
-		} else {
-			fmt.Printf("  ● Cloning base disk image...")
-			diskPath, err = storage.CloneDisk(versionedName)
-			if err != nil {
-				return fmt.Errorf("clone disk: %w", err)
-			}
-			if err := storage.InjectInit(diskPath); err != nil {
-				return fmt.Errorf("inject init: %w", err)
-			}
-			if err := storage.InjectDropbearSources(diskPath); err != nil {
-				fmt.Printf("\n  warning: SSH dropbear injection failed: %v\n", err)
-			} else if err := storage.GenerateDropbearHostKey(diskPath); err != nil {
-				fmt.Printf("\n  warning: SSH host key generation failed: %v\n", err)
-			}
-			injectSSHAuthorizedKeys(diskPath)
-			fmt.Printf(" done\n")
-		}
-
-		fmt.Printf("  ● Starting microVM v%d (cpus=%d, mem=%dMB)...", newVersion, sCfg.VCPUs, sCfg.MemoryMB)
-		vmCfg := compute.DefaultConfig(versionedName, diskPath, tapName, guestIP, mac)
-		vmCfg.VCPUs = sCfg.VCPUs
-		vmCfg.MemoryMB = sCfg.MemoryMB
-		vmCfg.RootReadOnly = rootReadOnly
-		vmCfg.HostsMapping = buildHostsMapping(sCfg.Name, guestIP)
-		if sCfg.Runtime == "quickwit" {
-			s3Cfg := config.GlobalS3Config()
-			if s3Cfg.Endpoint != "" {
-				vmCfg.HostsMapping = appendResolvedHosts(vmCfg.HostsMapping, s3Cfg.Endpoint)
-				if s3Cfg.Bucket != "" {
-					bucketHost := s3Cfg.Bucket + "." + extractHostname(s3Cfg.Endpoint)
-					vmCfg.HostsMapping = appendMappedHost(vmCfg.HostsMapping, s3Cfg.Endpoint, bucketHost)
-				}
-			}
-		}
-		vmCfg.IOBandwidthBps = deployIOBandwidth
-		vmCfg.PidsMax = deployPidsMax
-		vmCfg.SkipDiskCheck = deploySkipDiskCheck
-		vmCfg.Mode = sCfg.Mode
-
-		// Merge environment variables from toml and secrets store
-		mergedEnv, mergeErr := MergeEnv(existing.Name, sCfg.Env)
-		if mergeErr != nil {
-			fmt.Printf(" warning: failed to merge env vars: %v\n", mergeErr)
-		} else if len(mergedEnv) > 0 {
-			targetDisk := diskPath
-			if userDataDisk != "" {
-				targetDisk = userDataDisk
-			}
-			if err := storage.InjectSecrets(targetDisk, mergedEnv); err != nil {
-				fmt.Printf(" warning: failed to inject secrets onto disk: %v\n", err)
-			}
-		}
-
-		// Build metadata JSON for HTTP metadata service
-		if mdJSON, mdErr := compute.BuildMetadataJSON(vmCfg, mergedEnv); mdErr == nil {
-			vmCfg.MetadataJSON = mdJSON
-		}
-
-		// Setup drives: user data disk (if present) + persistent volumes
-		{
-			var extraDrives []string
-			var volsMapping []string
-			var volsFiles []string
-
-			// User data disk always comes first (becomes /dev/vdb)
-			volDevOffset := 0
-			if userDataDisk != "" {
-				extraDrives = append(extraDrives, userDataDisk)
-				volsMapping = append(volsMapping, fmt.Sprintf("/dev/vdb:%s", compute.UserDataMount))
-				volDevOffset = 1
-			}
-
-			if len(sCfg.Volumes) > 0 {
-				maxVol := 25 - volDevOffset // vdb through vdz is 25 letters, minus 1 if user data takes vdb
-				if len(sCfg.Volumes) > maxVol {
-					lastDev := byte('b' + maxVol - 1 + volDevOffset)
-					return fmt.Errorf("service %s has %d volumes, maximum is %d (device names vdb through vd%c)", sCfg.Name, len(sCfg.Volumes), maxVol, lastDev)
-				}
-				for vIdx, mountPath := range sCfg.Volumes {
-					volName := fmt.Sprintf("vol-%s-%s-%d", existing.Name, sCfg.Name, vIdx)
-					var volFile string
-					var volErr error
-					if deploySkipDiskCheck {
-						volFile, volErr = storage.CreateVolumeSkipCheck(volName, 1, sCfg.PreallocatedVolumes)
-					} else {
-						volFile, volErr = storage.CreateVolume(volName, 1, sCfg.PreallocatedVolumes)
-					}
-					if volErr != nil {
-						return fmt.Errorf("create volume %s: %w", volName, volErr)
-					}
-					extraDrives = append(extraDrives, volFile)
-					volsFiles = append(volsFiles, volFile)
-					devName := fmt.Sprintf("/dev/vd%c", byte('b'+vIdx+volDevOffset))
-					volsMapping = append(volsMapping, fmt.Sprintf("%s:%s", devName, mountPath))
-				}
-				fmt.Printf("  ● Attached %d volume(s)\n", len(sCfg.Volumes))
-			}
-			vmCfg.ExtraDrives = extraDrives
-			if len(volsMapping) > 0 {
-				vmCfg.VolumesMapping = strings.Join(volsMapping, ",")
-			}
-			// Store volume files in service state
-			svcVols = volsFiles
-		}
-
-		// Capture kernel args for scale-to-zero wake-up (after all config is set)
-		kernelArgs, kerr := compute.BuildKernelArgs(vmCfg)
-		if kerr != nil {
-			return fmt.Errorf("kernel args too long for service %s: %w", sCfg.Name, kerr)
-		}
-
-		// Register metadata with HTTP registry before starting VM
-		metadata.EnsureRunning()
-		if len(vmCfg.MetadataJSON) > 0 {
-			metadata.Register(guestIP, vmCfg.MetadataJSON)
-		}
-
-		vm, err := compute.StartVM(vmCfg)
-		if err != nil {
-			metadata.Deregister(guestIP)
-			storage.DeleteDisk(versionedName)
-			return fmt.Errorf("start VM: %w", err)
-		}
-
-		vmCfg.SocketPath = vm.Config.SocketPath
-		fmt.Printf(" done\n")
-
-		if sCfg.Expose {
-			fmt.Printf("  ● Health-checking v%d...", newVersion)
-			hpath := health.HealthPathForRuntime(sCfg.Runtime)
-			if err := health.CheckWithPath(guestIP, servicePort, hpath, 30*time.Second, 100*time.Millisecond); err != nil {
-				fmt.Printf(" FAILED\n")
-				metadata.Deregister(guestIP)
-				compute.StopVMByPID(vm.PID, vmCfg.SocketPath)
-				storage.DeleteDisk(versionedName)
-				return fmt.Errorf("health check failed for v%d — old VM left running: %w", newVersion, err)
-			}
-			fmt.Printf(" OK\n")
-		}
-
-		fmt.Printf("  ● Switching traffic to v%d...", newVersion)
-		if sCfg.Expose {
-			routeHostname := proj.RouteHostname(existing.Name, sCfg.Name)
-			if sCfg.AlwaysOn {
-				if err := routing.UpdateRoute(routeHostname, guestIP, servicePort); err != nil {
-					compute.StopVMByPID(vm.PID, vmCfg.SocketPath)
-					storage.DeleteDisk(versionedName)
-					return fmt.Errorf("route update failed — old VM left running: %w", err)
-				}
-			} else {
-				if err := routing.UpdateRoute(routeHostname, "127.0.0.1", scaletozero.DefaultProxyPort); err != nil {
-					compute.StopVMByPID(vm.PID, vmCfg.SocketPath)
-					storage.DeleteDisk(versionedName)
-					return fmt.Errorf("route update failed — old VM left running: %w", err)
-				}
-			}
-		}
-		fmt.Printf(" done\n")
-
-		time.Sleep(500 * time.Millisecond)
-
-		if oldSvc != nil {
-			fmt.Printf("  ● Tearing down v%d...", oldSvc.Version)
-
-			if oldSvc.PID > 0 {
-				if err := compute.StopVMByPID(oldSvc.PID, oldSvc.SocketPath); err != nil {
-					fmt.Printf(" warning: stop v%d: %v", oldSvc.Version, err)
-				}
-			}
-
-			// Clean up old disks. Skip shared root images (only delete per-VM disks).
-			if oldSvc.UserDataDisk != "" {
-				storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(oldSvc.UserDataDisk), ".ext4"))
-			}
-			if oldSvc.DiskPath != "" && !oldSvc.RootReadOnly {
-				diskName := strings.TrimSuffix(filepath.Base(oldSvc.DiskPath), ".ext4")
-				if !storage.IsSharedBaseImage(diskName) {
-					storage.DeleteDisk(diskName)
-				}
-			}
-
-			fmt.Printf(" done\n")
-		}
-
-		newSvc := &state.Service{
-			Name:         sCfg.Name,
-			VCPUs:        sCfg.VCPUs,
-			MemoryMB:     sCfg.MemoryMB,
-			AlwaysOn:     sCfg.AlwaysOn,
-			Ephemeral:    !sCfg.AlwaysOn && len(sCfg.Volumes) == 0,
-			Expose:       sCfg.Expose,
-			Version:      newVersion,
-			DiskPath:     diskPath,
-			UserDataDisk: userDataDisk,
-			RootReadOnly: rootReadOnly,
-			TAPDevice:    tapName,
-			GuestIP:      guestIP,
-			PID:          vm.PID,
-			SocketPath:   vmCfg.SocketPath,
-			MACAddress:   mac,
-			KernelArgs:   kernelArgs,
-			ServicePort:  servicePort,
-		}
-
-		if len(svcVols) > 0 {
-			newSvc.Volumes = svcVols
-		}
-
-		found := false
-		for idx, svc := range existing.Services {
-			if svc.Name == sCfg.Name {
-				existing.Services[idx] = newSvc
-				found = true
-				break
-			}
-		}
-		if !found {
-			existing.Services = append(existing.Services, newSvc)
-		}
-
-		existing.Status = state.StatusRunning
-		if err := store.Save(existing); err != nil {
-			return fmt.Errorf("save state: %w", err)
-		}
-	}
-
-	var keptServices []*state.Service
-	for _, svc := range existing.Services {
-		inConfig := false
-		for _, sCfg := range cfg.Services {
-			if svc.Name == sCfg.Name {
-				inConfig = true
-				break
-			}
-		}
-		if inConfig {
-			keptServices = append(keptServices, svc)
-		} else {
-			fmt.Printf("\n  [Service: %s] removed from config — tearing down...\n", svc.Name)
-			if svc.PID > 0 {
-				compute.StopVMByPID(svc.PID, svc.SocketPath)
-			}
-			if svc.Expose {
-				routeHostname := proj.RouteHostname(existing.Name, svc.Name)
-				routing.RemoveRoute(routeHostname)
-			}
-			if svc.UserDataDisk != "" {
-				storage.DeleteUserDataDisk(strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4"))
-			}
-			if svc.DiskPath != "" && !svc.RootReadOnly {
-				diskName := strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4")
-				if !storage.IsSharedBaseImage(diskName) {
-					storage.DeleteDisk(diskName)
-				}
-			}
-			fmt.Printf("  done\n")
-		}
-	}
-	existing.Services = keptServices
-
-	if err := store.Save(existing); err != nil {
-		return fmt.Errorf("save state: %w", err)
-	}
-
-	elapsed := time.Since(start)
-	fmt.Println()
-	fmt.Printf("  ✓ Upgraded %s  (%s)\n", existing.Name, elapsed.Round(time.Millisecond))
-
-	return nil
-}
-
-func injectConfigFile(diskPath, filename, content string) error {
-	mnt, err := os.MkdirTemp("", "umut-config-")
-	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(mnt)
-
-	if out, err := exec.Command("mount", diskPath, mnt).CombinedOutput(); err != nil {
-		return fmt.Errorf("mount disk %s: %s: %w", diskPath, string(out), err)
-	}
-	defer exec.Command("umount", mnt).Run()
-
-	return os.WriteFile(filepath.Join(mnt, filename), []byte(content), 0644)
-}
-
-func appendResolvedHosts(hostsMapping, endpointURL string) string {
-	hostname := endpointURL
-	hostname = strings.TrimPrefix(hostname, "https://")
-	hostname = strings.TrimPrefix(hostname, "http://")
-	hostname = strings.SplitN(hostname, "/", 2)[0]
-	hostname = strings.SplitN(hostname, ":", 2)[0]
-
-	ips, err := net.LookupHost(hostname)
-	if err != nil {
-		fmt.Printf("  warning: failed to resolve S3 endpoint %s: %v\n", hostname, err)
-		return hostsMapping
-	}
-
-	var entries []string
-	if hostsMapping != "" {
-		entries = append(entries, hostsMapping)
-	}
-	// Prefer IPv6: add IPv6 entries first, then IPv4 as fallback
-	var v4entries []string
-	for _, ip := range ips {
-		if strings.Contains(ip, ":") {
-			entries = append(entries, fmt.Sprintf("%s:%s", ip, hostname))
-		} else {
-			v4entries = append(v4entries, fmt.Sprintf("%s:%s", ip, hostname))
-		}
-	}
-	entries = append(entries, v4entries...)
-	return strings.Join(entries, ",")
-}
-
-func extractHostname(endpointURL string) string {
-	h := endpointURL
-	h = strings.TrimPrefix(h, "https://")
-	h = strings.TrimPrefix(h, "http://")
-	h = strings.SplitN(h, "/", 2)[0]
-	h = strings.SplitN(h, ":", 2)[0]
-	return h
-}
-
-func appendMappedHost(hostsMapping, endpointURL, bucketHost string) string {
-	hostname := extractHostname(endpointURL)
-	if hostname == "" || bucketHost == "" {
-		return hostsMapping
-	}
-	var entries []string
-	if hostsMapping != "" {
-		parts := strings.Split(hostsMapping, ",")
-		for _, p := range parts {
-			kv := strings.SplitN(p, ":", 2)
-			if len(kv) == 2 && kv[1] == hostname {
-				entries = append(entries, fmt.Sprintf("%s:%s", kv[0], bucketHost))
-			}
-		}
-	}
-	if len(entries) > 0 {
-		return hostsMapping + "," + strings.Join(entries, ",")
-	}
-	return hostsMapping
-}
-
-func extractProjectIndexFromServices(project *state.Project) int {
-	for _, svc := range project.Services {
-		if svc.GuestIP != "" {
-			if strings.Contains(svc.GuestIP, ":") {
-				// IPv6 ULA: fd00:172:26:PP::SS  (PP=projectIndex, SS=serviceIndex+2)
-				parts := strings.Split(svc.GuestIP, ":")
-				skip := 0
-				for _, p := range parts {
-					if p == "" {
-						continue // zero-compression gap
-					}
-					skip++
-					if skip == 4 && p != "" {
-						// 4th non-empty hextet = project index
-						var idx int
-						fmt.Sscanf(p, "%d", &idx)
-						return idx
-					}
-				}
-				// If we didn't find 4 non-empty hextets, project index is 0 (compressed out)
-				return 0
-			}
-			// Legacy IPv4: 172.26.X.Y
-			parts := strings.Split(svc.GuestIP, ".")
-			if len(parts) == 4 {
-				var idx int
-				fmt.Sscanf(parts[2], "%d", &idx)
-				return idx
-			}
-		}
-	}
-	return len(project.Services)
-}
-
-func injectSSHAuthorizedKeys(diskPath string) {
-	for _, keyPath := range []string{
-		os.ExpandEnv("$HOME/.ssh/id_ed25519.pub"),
-		os.ExpandEnv("$HOME/.ssh/id_rsa.pub"),
-	} {
-		pub, err := os.ReadFile(keyPath)
+	for _, p := range paths {
+		pub, err := os.ReadFile(p)
 		if err != nil {
 			continue
 		}
 		if err := storage.InjectAuthorizedKeys(diskPath, string(pub)); err != nil {
-			fmt.Printf("\n  warning: SSH authorized_keys injection failed: %v\n", err)
-			return
+			return err
 		}
-		return
+		return nil
 	}
+	return fmt.Errorf("no SSH public key found")
 }

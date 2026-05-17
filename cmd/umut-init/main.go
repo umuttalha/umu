@@ -29,6 +29,8 @@ func main() {
 
 	mountFilesystems()
 
+	setHostname()
+
 	initDpkg()
 
 	ip, gw, hosts, vols, _ := parseCmdline()
@@ -57,6 +59,21 @@ func main() {
 	}
 
 	runEntrypoint(envVars)
+}
+
+func setHostname() {
+	data, err := os.ReadFile("/etc/hostname")
+	if err != nil {
+		return
+	}
+	name := strings.TrimSpace(string(data))
+	if name == "" || name == "(none)" {
+		return
+	}
+	if byteSlice := []byte(name); len(byteSlice) > 0 {
+		syscall.Sethostname(byteSlice)
+		log.Printf("[umut-init] Hostname: %s\n", name)
+	}
 }
 
 func initDpkg() {
@@ -564,7 +581,7 @@ func startDropbear() {
 		return
 	}
 	log.Println("[umut-init] Starting dropbear SSH on port 22")
-	dropbearCmd := exec.Command("/usr/sbin/dropbear", "-F", "-E", "-p", "22")
+	dropbearCmd := exec.Command("/usr/sbin/dropbear", "-F", "-e", "-p", "22")
 	dropbearCmd.Stdout = os.Stdout
 	dropbearCmd.Stderr = os.Stderr
 	if err := dropbearCmd.Start(); err != nil {

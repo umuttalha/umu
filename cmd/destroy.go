@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -18,18 +17,16 @@ import (
 
 var destroyForce bool
 var destroyKeepDisk bool
-var destroyVolumes bool
 
 var destroyCmd = &cobra.Command{
 	Use:   "destroy <project-name>",
 	Short: "Tear down a running project and release all resources",
 	Long: `Destroy stops the Firecracker microVM, removes the network interface,
-deletes the Caddy route, and optionally removes the disk image and volumes.
+deletes the Caddy route, and optionally removes the disk image.
 
 Example:
   umut destroy myproject
   umut destroy myproject --keep-disk
-  umut destroy myproject --volumes
   umut destroy myproject --force`,
 	Args: cobra.ExactArgs(1),
 	RunE: runDestroy,
@@ -38,7 +35,6 @@ Example:
 func init() {
 	destroyCmd.Flags().BoolVarP(&destroyForce, "force", "f", false, "skip confirmation prompt")
 	destroyCmd.Flags().BoolVar(&destroyKeepDisk, "keep-disk", false, "keep the rootfs disk image after destroying the VM")
-	destroyCmd.Flags().BoolVar(&destroyVolumes, "volumes", false, "delete all persistent volumes attached to this project (DANGEROUS)")
 	rootCmd.AddCommand(destroyCmd)
 }
 
@@ -87,7 +83,14 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// 2. Remove Routes
+		// 2. Remove NDP proxy
+		if svc.GlobalIP != "" {
+			fmt.Printf("  ● Removing NDP proxy...")
+			network.RemoveNDPProxy(svc.GlobalIP)
+			fmt.Printf(" done\n")
+		}
+
+		// 3. Remove Routes
 		if svc.Expose {
 			routeHostname := proj.RouteHostname(projectName, svc.Name)
 			fmt.Printf("  ● Removing route %s...", routeHostname)
@@ -98,57 +101,19 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// 3. Remove TAP interface
+		// 4. Remove TAP interface
 		if svc.TAPDevice != "" {
 			network.DestroyTAP(svc.TAPDevice)
 		}
 
-		// 3. Delete disks (skip shared read-only root images)
+		// 5. Delete disk
 		if !destroyKeepDisk {
-			log.Printf("[destroy] cleaning disks for %s/%s (DiskPath=%s, RootReadOnly=%v, UserDataDisk=%s)\n",
-				projectName, svc.Name, svc.DiskPath, svc.RootReadOnly, svc.UserDataDisk)
 			fmt.Printf("  ● Cleaning up disk images...")
-
-			// Delete per-user data disk (shared root mode, ephemeral)
-			if svc.UserDataDisk != "" {
-				userDataName := strings.TrimSuffix(filepath.Base(svc.UserDataDisk), ".ext4")
-				storage.DeleteUserDataDisk(userDataName)
-			}
-
-			// Delete root disk — never delete shared read-only base images
-			if svc.DiskPath != "" && !svc.RootReadOnly {
+			if svc.DiskPath != "" {
 				diskName := strings.TrimSuffix(filepath.Base(svc.DiskPath), ".ext4")
-				if !storage.IsSharedBaseImage(diskName) {
-					storage.DeleteDisk(diskName)
-					// Also try legacy unversioned name
-					legacyName := fmt.Sprintf("%s-%s", projectName, svc.Name)
-					if diskName != legacyName && !storage.IsSharedBaseImage(legacyName) {
-						storage.DeleteDisk(legacyName)
-					}
-				}
-			} else if svc.DiskPath == "" {
-				// Legacy fallback when DiskPath is empty
-				legacyName := fmt.Sprintf("%s-%s", projectName, svc.Name)
-				if !storage.IsSharedBaseImage(legacyName) {
-					storage.DeleteDisk(legacyName)
-				}
-			}
-
-			fmt.Printf(" done\n")
-		}
-
-		// 5. Delete Persistent Volumes
-		if destroyVolumes && len(svc.Volumes) > 0 {
-			fmt.Printf("  ● Deleting %d persistent volume(s)...", len(svc.Volumes))
-			for _, volFile := range svc.Volumes {
-				volName := strings.TrimSuffix(filepath.Base(volFile), ".ext4")
-				if err := storage.DeleteVolume(volName); err != nil {
-					fmt.Printf("\n    warning: %v", err)
-				}
+				storage.DeleteDisk(diskName)
 			}
 			fmt.Printf(" done\n")
-		} else if len(svc.Volumes) > 0 {
-			fmt.Printf("  ● Kept %d persistent volume(s) (use --volumes to delete)\n", len(svc.Volumes))
 		}
 	}
 

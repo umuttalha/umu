@@ -30,13 +30,6 @@ var runtimeDefaults = map[string]struct {
 	"sqlite":   {Port: 8080, VCPUs: 1, Memory: 256},
 }
 
-func RuntimeDefaultPort(runtime string) int {
-	if d, ok := runtimeDefaults[runtime]; ok {
-		return d.Port
-	}
-	return 8080
-}
-
 func RuntimeDefaultVCPUs(runtime string) int {
 	if d, ok := runtimeDefaults[runtime]; ok {
 		return d.VCPUs
@@ -49,56 +42,6 @@ func RuntimeDefaultMemory(runtime string) int {
 		return d.Memory
 	}
 	return 1024
-}
-
-// S3Config holds global S3 credentials for managed Quickwit instances.
-// Configured in /etc/umut/umut.toml under the [s3] section.
-type S3Config struct {
-	Endpoint        string `toml:"endpoint"`
-	Region          string `toml:"region"`
-	Bucket          string `toml:"bucket"`
-	AccessKeyID     string `toml:"access_key_id"`
-	SecretAccessKey string `toml:"secret_access_key"`
-	Token           string `toml:"token"`
-}
-
-// GlobalS3Config parses the [s3] section from umut.toml and merges with env vars.
-func GlobalS3Config() S3Config {
-	cfg := S3Config{
-		Endpoint: os.Getenv("UMUT_S3_ENDPOINT"),
-		Region:   os.Getenv("UMUT_S3_REGION"),
-		Bucket:   os.Getenv("UMUT_S3_BUCKET"),
-	}
-
-	data, err := os.ReadFile("/etc/umut/umut.toml")
-	if err != nil {
-		return cfg
-	}
-
-	var top struct {
-		S3 S3Config `toml:"s3"`
-	}
-	if toml.Unmarshal(data, &top) == nil {
-		if top.S3.Endpoint != "" {
-			cfg.Endpoint = top.S3.Endpoint
-		}
-		if top.S3.Region != "" {
-			cfg.Region = top.S3.Region
-		}
-		if top.S3.Bucket != "" {
-			cfg.Bucket = top.S3.Bucket
-		}
-		if top.S3.AccessKeyID != "" {
-			cfg.AccessKeyID = top.S3.AccessKeyID
-		}
-		if top.S3.SecretAccessKey != "" {
-			cfg.SecretAccessKey = top.S3.SecretAccessKey
-		}
-		if top.S3.Token != "" {
-			cfg.Token = top.S3.Token
-		}
-	}
-	return cfg
 }
 
 // UmutConfig represents the merged configuration for a deployment.
@@ -277,16 +220,13 @@ func validateVolumePaths(volumes []string) error {
 }
 
 // MergeCLI overrides the struct fields with CLI flags for all services if provided.
-func (c *UmutConfig) MergeCLI(vcpus, memoryMB int, alwaysOn bool) {
+func (c *UmutConfig) MergeCLI(vcpus, memoryMB int) {
 	for i := range c.Services {
 		if vcpus > 0 {
 			c.Services[i].VCPUs = vcpus
 		}
 		if memoryMB > 0 {
 			c.Services[i].MemoryMB = memoryMB
-		}
-		if alwaysOn {
-			c.Services[i].AlwaysOn = true
 		}
 	}
 }

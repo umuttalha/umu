@@ -12,7 +12,6 @@ import (
 	"github.com/umuttalha/umut/internal/network"
 	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
-	"github.com/umuttalha/umut/internal/scaletozero"
 	"github.com/umuttalha/umut/internal/state"
 	"golang.org/x/sync/errgroup"
 )
@@ -135,8 +134,17 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 			}
 
 			vmCfg := compute.DefaultConfig(vmName, svc.DiskPath, tapName, svc.GuestIP, svc.MACAddress)
-			vmCfg.VCPUs = svc.VCPUs
-			vmCfg.MemoryMB = svc.MemoryMB
+			cpus := svc.VCPUs
+			if cpus == 0 {
+				cpus = 1
+			}
+			mem := svc.MemoryMB
+			if mem == 0 {
+				mem = 256
+			}
+			vmCfg.GuestGlobalIP = svc.GlobalIP
+			vmCfg.VCPUs = cpus
+			vmCfg.MemoryMB = mem
 			vmCfg.RootReadOnly = svc.RootReadOnly
 			vmCfg.ExtraDrives = extraDrives
 			vmCfg.HostsMapping = hostsString
@@ -170,8 +178,17 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 		if !usedSnapshot {
 			fmt.Printf("  ● Starting microVM (cpus=%d, mem=%dMB)...", svc.VCPUs, svc.MemoryMB)
 			vmCfg := compute.DefaultConfig(vmName, svc.DiskPath, tapName, svc.GuestIP, svc.MACAddress)
-			vmCfg.VCPUs = svc.VCPUs
-			vmCfg.MemoryMB = svc.MemoryMB
+			cpus := svc.VCPUs
+			if cpus == 0 {
+				cpus = 1
+			}
+			mem := svc.MemoryMB
+			if mem == 0 {
+				mem = 256
+			}
+			vmCfg.GuestGlobalIP = svc.GlobalIP
+			vmCfg.VCPUs = cpus
+			vmCfg.MemoryMB = mem
 			vmCfg.RootReadOnly = svc.RootReadOnly
 			vmCfg.ExtraDrives = extraDrives
 			vmCfg.HostsMapping = hostsString
@@ -206,26 +223,14 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 		if svc.Expose {
 			fmt.Printf("  ● Configuring proxy...")
 			routeHostname := proj.RouteHostname(projectName, svc.Name)
-			if svc.AlwaysOn {
-				if err := routing.AddRoute(routeHostname, svc.GuestIP, svc.ServicePort); err != nil {
-					fmt.Printf(" warning: caddy route failed: %v\n", err)
-				}
-			} else {
-				if err := routing.AddRoute(routeHostname, "127.0.0.1", scaletozero.DefaultProxyPort); err != nil {
-					fmt.Printf(" warning: caddy route failed: %v\n", err)
-				}
+			if err := routing.AddRoute(routeHostname, svc.GuestIP, svc.ServicePort); err != nil {
+				fmt.Printf(" warning: caddy route failed: %v\n", err)
 			}
 			fmt.Printf(" exposed at %s\n", routeHostname)
 		}
 	}
 
 	// --- Phase 5: Async health checks (non-blocking) ---
-	hpath := health.HealthPathForRuntime(project.Runtime)
-	// Use runtime-aware timeout: quickwit needs more time to boot
-	healthTimeout := 10 * time.Second
-	if project.Runtime == "quickwit" {
-		healthTimeout = 60 * time.Second
-	}
 	if len(services) > 1 {
 		g := new(errgroup.Group)
 		for i := range services {
@@ -234,7 +239,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 				continue
 			}
 			g.Go(func() error {
-				return health.CheckWithPath(services[i].GuestIP, services[i].ServicePort, hpath, healthTimeout, 100*time.Millisecond)
+				return health.CheckWithPath(services[i].GuestIP, services[i].ServicePort, "/", 10*time.Second, 100*time.Millisecond)
 			})
 		}
 		go func() {
@@ -247,10 +252,8 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 	} else {
 		for _, svc := range services {
 			if svc.Expose {
-				i := 0
-				_ = i
 				go func() {
-					if err := health.CheckWithPath(svc.GuestIP, svc.ServicePort, hpath, healthTimeout, 100*time.Millisecond); err != nil {
+					if err := health.CheckWithPath(svc.GuestIP, svc.ServicePort, "/", 10*time.Second, 100*time.Millisecond); err != nil {
 						fmt.Printf("  warning: health check: %v\n", err)
 					} else {
 						fmt.Printf("  ● Health check: OK\n")
