@@ -34,8 +34,8 @@ func runList(cmd *cobra.Command, args []string) error {
 	projects := store.List()
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "  PROJECT\tSERVICE\tIP\tURL")
-	fmt.Fprintln(w, "  ───────\t───────\t──\t───")
+	fmt.Fprintln(w, "  PROJECT\tSERVICE\tIP\tGLOBAL IP\tURL")
+	fmt.Fprintln(w, "  ───────\t───────\t──\t─────────\t───")
 
 	for _, p := range projects {
 		for i, svc := range p.Services {
@@ -53,7 +53,7 @@ func runList(cmd *cobra.Command, args []string) error {
 				}
 			}
 
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", projName, svc.Name, svc.GuestIP, url)
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n", projName, svc.Name, svc.GuestIP, svc.GlobalIP, url)
 		}
 	}
 

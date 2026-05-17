@@ -13,10 +13,9 @@ import (
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$`)
 
 var validRuntimes = map[string]bool{
-	"python":   true,
-	"deno":     true,
-	"quickwit": true,
-	"sqlite":   true,
+	"python": true,
+	"deno":   true,
+	"sqlite": true,
 }
 
 var runtimeDefaults = map[string]struct {
@@ -24,10 +23,9 @@ var runtimeDefaults = map[string]struct {
 	VCPUs  int
 	Memory int
 }{
-	"python":   {Port: 8080, VCPUs: 2, Memory: 1024},
-	"deno":     {Port: 8080, VCPUs: 2, Memory: 1024},
-	"quickwit": {Port: 7280, VCPUs: 2, Memory: 1024},
-	"sqlite":   {Port: 8080, VCPUs: 1, Memory: 256},
+	"python": {Port: 8080, VCPUs: 2, Memory: 1024},
+	"deno":   {Port: 8080, VCPUs: 2, Memory: 1024},
+	"sqlite": {Port: 8080, VCPUs: 1, Memory: 256},
 }
 
 func RuntimeDefaultVCPUs(runtime string) int {
@@ -109,7 +107,7 @@ func Load(dir string) (UmutConfig, error) {
 
 	if tempCfg.Runtime != "" {
 		if !validRuntimes[tempCfg.Runtime] {
-			return cfg, fmt.Errorf("invalid runtime %q (must be one of: python, deno, quickwit)", tempCfg.Runtime)
+			return cfg, fmt.Errorf("invalid runtime %q (must be one of: python, deno, sqlite)", tempCfg.Runtime)
 		}
 		cfg.Runtime = tempCfg.Runtime
 	}
@@ -137,7 +135,7 @@ func Load(dir string) (UmutConfig, error) {
 			if s.Runtime == "" {
 				s.Runtime = cfg.Runtime
 			} else if !validRuntimes[s.Runtime] {
-				return cfg, fmt.Errorf("service %q: invalid runtime %q (must be one of: python, deno, quickwit)", s.Name, s.Runtime)
+				return cfg, fmt.Errorf("service %q: invalid runtime %q (must be one of: python, deno, sqlite)", s.Name, s.Runtime)
 			}
 			if s.VCPUs == 0 {
 				s.VCPUs = RuntimeDefaultVCPUs(s.Runtime)

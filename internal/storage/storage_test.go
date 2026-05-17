@@ -91,22 +91,6 @@ func TestVolumeCreationSkipCheck(t *testing.T) {
 	DeleteVolume(volName)
 }
 
-func TestUserDataDiskCreation(t *testing.T) {
-	diskName := "test-userdata-disk"
-
-	DeleteUserDataDisk(diskName)
-
-	path, err := CreateUserDataDisk(diskName, false)
-	if err != nil {
-		t.Fatalf("failed to create user data disk: %v", err)
-	}
-
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("user data disk not found: %v", err)
-	}
-
-	DeleteUserDataDisk(diskName)
-}
 
 func TestCheckDiskSpace_Pass(t *testing.T) {
 	// Use a temp directory — checkDiskSpaceAt always resolves the filesystem

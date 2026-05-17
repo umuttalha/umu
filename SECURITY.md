@@ -51,7 +51,7 @@ Security model, audit findings, and hardening plan for **umut** — a personal s
 | Measure | Details |
 |---|---|
 | **Builder isolation** | Ephemeral builder VMs for Dockerfiles — never runs `docker build` on the host | `internal/builder/builder.go` |
-| **Scale-to-zero** | Idle VMs killed after 5 min; interceptor proxy on `127.0.0.1:3699` only | `internal/scaletozero/scaletozero.go` |
+| **Scale-to-zero** | Idle VMs can be frozen to disk via snapshot and restored on demand | `cmd/freeze.go`, `cmd/unfreeze.go` |
 | **Per-project host keys** | Unique SSH host keys regenerated on first deploy, reused across rolling updates | `cmd/deploy.go` |
 
 ---
@@ -194,7 +194,7 @@ All VMs previously used **CID=3** for vsock (the default Firecracker host CID). 
 - New `VsockCID` field in `VMConfig` (`internal/compute/config.go:43`) — each VM now receives a unique CID.
 - `VsockGuestCID(projectIndex, serviceIndex)` computes unique CIDs: `CID = 3 + projectIndex*10 + serviceIndex`. CIDs 0, 1, 2 are reserved by the VMCI/Vsock spec; guest VMs start at 3. Each project gets 10 CID slots.
 - `StartVM()` uses `cfg.VsockCID` instead of hardcoded 3, with fallback to `VsockCIDBase` (3) for backward compatibility when `VsockCID` is 0.
-- All VM creation paths (`cmd/deploy.go`, `internal/api/server.go`, `internal/scaletozero/scaletozero.go`) compute and set unique CIDs per VM.
+- All VM creation paths (`cmd/deploy.go`, `internal/api/server.go`, `cmd/unfreeze.go`) compute and set unique CIDs per VM.
 - `Service` state persists `VsockCID` in `state.json`; wake-up from scale-to-zero reuses the stored CID.
 - `computeVsockCIDFromBridgeIP()` fallback reconstructs CIDs from the bridge IP for old deployments that predate this fix.
 - **Test coverage**: `TestVsockGuestCID_Uniqueness` (1000 VMs, no collisions), `TestVsockGuestCID_Sequential`, `TestVsockGuestCID_ReservedRange`, `TestExtractProjectIndexFromIP`, `TestComputeVsockCIDFromBridgeIP` (with service-not-found, invalid IP, and multi-project edge cases), `TestServiceVsockCIDSerialization`, `TestServiceVsockCIDZeroOmitted`.
@@ -204,7 +204,7 @@ All VMs previously used **CID=3** for vsock (the default Firecracker host CID). 
 ### F-10: No metadata service for guest→host communication ✅ RESOLVED
 
 **Severity:** Informational  
-**Files:** `internal/metadata/server.go`, `internal/compute/config.go`, `internal/compute/vm.go`, `cmd/umut-init/main.go`, `cmd/deploy.go`, `internal/api/server.go`, `internal/scaletozero/scaletozero.go`
+**Files:** `internal/metadata/server.go`, `internal/compute/config.go`, `internal/compute/vm.go`, `cmd/umut-init/main.go`, `cmd/deploy.go`, `internal/api/server.go`, `cmd/unfreeze.go`
 
 The VM uses kernel command line (`umut.*` params parsed in `/proc/cmdline`) as the sole mechanism to receive configuration from the host. This is:
 - Limited to 2048 bytes total
@@ -217,7 +217,7 @@ The VM uses kernel command line (`umut.*` params parsed in `/proc/cmdline`) as t
 - **Guest side**: `umut-init` calls `fetchMetadata()` at boot, connecting to CID=2, port=9998 via vsock. Metadata takes priority over kernel cmdline for all configuration values.
 - **Backward compatibility**: Guests fall back to `/proc/cmdline` parsing if the metadata service is not available (old deployments, non-metadata-enabled VMs like builder VMs).
 - `VMConfig.MetadataJSON` field carries the pre-serialized metadata payload; `BuildMetadataJSON()` in `config.go` generates it.
-- All VM launch paths updated: `cmd/deploy.go`, `internal/api/server.go`, `internal/scaletozero/scaletozero.go`.
+- All VM launch paths updated: `cmd/deploy.go`, `internal/api/server.go`, `cmd/unfreeze.go`.
 
 ---
 
@@ -466,7 +466,7 @@ Guest uses metadata → replaces /proc/cmdline for configuration
 | `internal/compute/config.go:MetadataCID`, `MetadataServicePort` | Well-known vsock constants |
 | `internal/compute/vm.go` | Starts metadata server before `machine.Start()`, enables vsock when `MetadataJSON` is set |
 | `cmd/umut-init/main.go:fetchMetadata()` | Guest-side vsock client connecting to CID=2:9998 |
-| `cmd/deploy.go`, `internal/api/server.go`, `internal/scaletozero/scaletozero.go` | Build `MetadataJSON` before VM launch |
+| `cmd/deploy.go`, `internal/api/server.go`, `cmd/unfreeze.go` | Build `MetadataJSON` before VM launch |
 
 ## Builder VM Isolation (R-12)
 

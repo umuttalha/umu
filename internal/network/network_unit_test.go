@@ -14,13 +14,13 @@ func TestAllocateGuestIPDeterministic(t *testing.T) {
 		serviceIndex int
 		expectedIP   string
 	}{
-		{"proj0 svc0", 0, 0, "172.26.0.2"},
-		{"proj0 svc1", 0, 1, "172.26.0.3"},
-		{"proj0 svc5", 0, 5, "172.26.0.7"},
-		{"proj5 svc0", 5, 0, "172.26.5.2"},
-		{"proj5 svc3", 5, 3, "172.26.5.5"},
-		{"proj3 svc0", 3, 0, "172.26.3.2"},
-		{"proj3 svc2", 3, 2, "172.26.3.4"},
+		{"proj0 svc0", 0, 0, "fd00:172:26::2"},
+		{"proj0 svc1", 0, 1, "fd00:172:26::3"},
+		{"proj0 svc5", 0, 5, "fd00:172:26::7"},
+		{"proj5 svc0", 5, 0, "fd00:172:26::52"},
+		{"proj5 svc3", 5, 3, "fd00:172:26::55"},
+		{"proj3 svc0", 3, 0, "fd00:172:26::32"},
+		{"proj3 svc2", 3, 2, "fd00:172:26::34"},
 	}
 
 	for _, tt := range tests {
@@ -37,13 +37,12 @@ func TestAllocateGuestIPDeterministic(t *testing.T) {
 func TestAllocateGuestIPRange(t *testing.T) {
 	// Test overflow: max values
 	maxIP := AllocateGuestIP(255, 253)
-	if !strings.HasPrefix(maxIP, "172.26.") {
-		t.Errorf("AllocateGuestIP(255, 253) = %s, should be in 172.26.x.x range", maxIP)
+	if !strings.Contains(maxIP, "172.26:") {
+		t.Errorf("AllocateGuestIP(255, 253) = %s, should contain 172.26:", maxIP)
 	}
-	// The third octet is projectIndex, fourth is 2+serviceIndex
 	got := AllocateGuestIP(10, 0)
-	if got != "172.26.10.2" {
-		t.Errorf("AllocateGuestIP(10, 0) = %s, want 172.26.10.2", got)
+	if got != "fd00:172:26::102" {
+		t.Errorf("AllocateGuestIP(10, 0) = %s, want fd00:172:26::102", got)
 	}
 }
 
@@ -145,16 +144,12 @@ func TestChecksumStability(t *testing.T) {
 }
 
 func TestGuestIPSubnet(t *testing.T) {
-	// All guest IPs should be in the 172.26.x.x range
+	// All guest IPs should be in the fd00:172:26::/64 range
 	for pi := 0; pi < 10; pi++ {
 		for si := 0; si < 10; si++ {
 			ip := AllocateGuestIP(pi, si)
-			if !strings.HasPrefix(ip, "172.26.") {
-				t.Errorf("AllocateGuestIP(%d, %d) = %s, should be in 172.26.x.x", pi, si, ip)
-			}
-			parts := strings.Split(ip, ".")
-			if len(parts) != 4 {
-				t.Errorf("invalid IP: %s", ip)
+			if !strings.HasPrefix(ip, "fd00:172:26:") {
+				t.Errorf("AllocateGuestIP(%d, %d) = %s, should start with fd00:172:26:", pi, si, ip)
 			}
 		}
 	}

@@ -57,7 +57,7 @@ func EnsureSharedBridge() {
 }
 
 func AllocateGuestIP(projectIndex, serviceIndex int) string {
-	return fmt.Sprintf("%s:%d::%d", SubnetBase, projectIndex, serviceIndex+2)
+	return fmt.Sprintf("%s::%d", SubnetBase, projectIndex*10+serviceIndex+2)
 }
 
 // AllocateGuestGlobalIP assigns a globally-routable IPv6 from the Hetzner /64 prefix.
