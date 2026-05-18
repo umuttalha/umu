@@ -15,26 +15,34 @@ import (
 	"github.com/umuttalha/umut/internal/storage"
 )
 
-var resizeDiskGB int
-var resizeForce bool
+var (
+	resizeDiskGB int
+	resizeCPUs   int
+	resizeMemory int
+	resizeForce  bool
+)
 
 var resizeCmd = &cobra.Command{
-	Use:   "resize <project-name> --disk <new-size-GB>",
-	Short: "Resize a VM's root disk (online grow)",
-	Long: `Resize grows a VM's root disk to the specified size.
-The VM is briefly stopped, the disk is expanded, and the VM is restarted automatically.
+	Use:   "resize <project-name> [--disk <GB>] [--cpus <N>] [--memory <MB>]",
+	Short: "Resize a VM's resources (disk, CPU, memory)",
+	Long: `Resize grows a VM's root disk and/or changes CPU/memory allocation.
+The VM is briefly stopped, resized, and restarted automatically.
+
+Resources left at 0 keep their current value.
 
 Example:
   umut resize myserver --disk 40
-  umut resize myserver --disk 40 --force`,
+  umut resize myserver --cpus 4 --memory 2048
+  umut resize myserver --disk 40 --cpus 2 --memory 1024`,
 	Args: cobra.ExactArgs(1),
 	RunE: runResize,
 }
 
 func init() {
-	resizeCmd.Flags().IntVar(&resizeDiskGB, "disk", 0, "new disk size in GB (required)")
+	resizeCmd.Flags().IntVar(&resizeDiskGB, "disk", 0, "new disk size in GB (0 = keep current)")
+	resizeCmd.Flags().IntVar(&resizeCPUs, "cpus", 0, "new number of vCPUs (0 = keep current)")
+	resizeCmd.Flags().IntVar(&resizeMemory, "memory", 0, "new memory in MB (0 = keep current)")
 	resizeCmd.Flags().BoolVarP(&resizeForce, "force", "f", false, "skip confirmation prompt")
-	resizeCmd.MarkFlagRequired("disk")
 	rootCmd.AddCommand(resizeCmd)
 }
 
@@ -46,8 +54,11 @@ func runResize(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if resizeDiskGB <= 0 {
-		return fmt.Errorf("--disk must be a positive number (GB)")
+	if resizeDiskGB < 0 || resizeCPUs < 0 || resizeMemory < 0 {
+		return fmt.Errorf("--disk, --cpus, and --memory must be >= 0")
+	}
+	if resizeDiskGB == 0 && resizeCPUs == 0 && resizeMemory == 0 {
+		return fmt.Errorf("at least one of --disk, --cpus, --memory must be set")
 	}
 
 	store, err := state.NewStore()
@@ -75,12 +86,37 @@ func runResize(cmd *cobra.Command, args []string) error {
 	}
 
 	currentSize := getDiskSizeGB(diskPath)
-	if resizeDiskGB <= currentSize {
-		return fmt.Errorf("new size %dGB must be larger than current size %dGB", resizeDiskGB, currentSize)
+	if resizeDiskGB > 0 && resizeDiskGB <= currentSize {
+		return fmt.Errorf("new disk size %dGB must be larger than current size %dGB", resizeDiskGB, currentSize)
+	}
+	if resizeCPUs > 0 && resizeCPUs == svc.VCPUs {
+		return fmt.Errorf("new vCPUs %d is same as current %d", resizeCPUs, svc.VCPUs)
+	}
+	if resizeMemory > 0 && resizeMemory == svc.MemoryMB {
+		return fmt.Errorf("new memory %dMB is same as current %dMB", resizeMemory, svc.MemoryMB)
+	}
+
+	// Build summary of changes
+	changes := []string{}
+	if resizeDiskGB > 0 {
+		changes = append(changes, fmt.Sprintf("disk %dGB→%dGB", currentSize, resizeDiskGB))
+	}
+	if resizeCPUs > 0 {
+		changes = append(changes, fmt.Sprintf("cpus %d→%d", svc.VCPUs, resizeCPUs))
+	}
+	if resizeMemory > 0 {
+		changes = append(changes, fmt.Sprintf("memory %dMB→%dMB", svc.MemoryMB, resizeMemory))
+	}
+	summary := ""
+	for i, c := range changes {
+		if i > 0 {
+			summary += ", "
+		}
+		summary += c
 	}
 
 	if !resizeForce {
-		fmt.Printf("  Resize %s disk from %dGB → %dGB? VM will restart. [y/N] ", projectName, currentSize, resizeDiskGB)
+		fmt.Printf("  Resize %s (%s)? VM will restart. [y/N] ", projectName, summary)
 		var confirm string
 		fmt.Scanln(&confirm)
 		if confirm != "y" && confirm != "Y" {
@@ -89,7 +125,7 @@ func runResize(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("  Resizing %s  %dGB → %dGB\n", projectName, currentSize, resizeDiskGB)
+	fmt.Printf("  Resizing %s  %s\n", projectName, summary)
 
 	// 1. Stop the VM
 	fmt.Printf("  ● Stopping microVM (pid %d)...", svc.PID)
@@ -116,12 +152,22 @@ func runResize(cmd *cobra.Command, args []string) error {
 	svc.PID = 0
 	fmt.Printf(" done\n")
 
-	// 2. Resize the disk
-	fmt.Printf("  ● Expanding disk to %dGB...", resizeDiskGB)
-	if err := storage.ResizeDisk(diskPath, resizeDiskGB); err != nil {
-		return fmt.Errorf("resize disk: %w", err)
+	// 2. Resize the disk (if requested)
+	if resizeDiskGB > 0 {
+		fmt.Printf("  ● Expanding disk to %dGB...", resizeDiskGB)
+		if err := storage.ResizeDisk(diskPath, resizeDiskGB); err != nil {
+			return fmt.Errorf("resize disk: %w", err)
+		}
+		fmt.Printf(" done\n")
 	}
-	fmt.Printf(" done\n")
+
+	// Apply CPU/memory changes to service state
+	if resizeCPUs > 0 {
+		svc.VCPUs = resizeCPUs
+	}
+	if resizeMemory > 0 {
+		svc.MemoryMB = resizeMemory
+	}
 
 	// 3. Restart the VM (cold boot)
 	fmt.Printf("  ● Starting microVM (cpus=%d, mem=%dMB)...", svc.VCPUs, svc.MemoryMB)
@@ -183,7 +229,7 @@ func runResize(cmd *cobra.Command, args []string) error {
 
 	elapsed := time.Since(start)
 	fmt.Println()
-	fmt.Printf("  ✓ Resized %s  %dGB → %dGB  (%s)\n", projectName, currentSize, resizeDiskGB, elapsed.Round(time.Millisecond))
+	fmt.Printf("  ✓ Resized %s  (%s)  (%s)\n", projectName, summary, elapsed.Round(time.Millisecond))
 	fmt.Printf("  → SSH:  ssh root@%s\n", svc.GlobalIP)
 
 	return nil
