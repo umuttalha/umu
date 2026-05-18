@@ -1,6 +1,6 @@
 # umu
 
-> Personal micro-Hetzner — deploy Ubuntu VMs on bare metal in seconds.
+> Personal micro-VM provider — deploy Ubuntu VMs on bare metal in seconds.
 
 ```
 umu deploy myserver --cpus 2 --memory 4096 --disk 20

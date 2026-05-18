@@ -83,6 +83,13 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("register project: %w", err)
 	}
 
+	deployOK := false
+	defer func() {
+		if !deployOK {
+			store.Delete(projectName)
+		}
+	}()
+
 	guestIP := network.AllocateGuestIP(projectIndex, 0)
 	guestIPv4 := network.AllocateGuestIPv4(projectIndex)
 	globalIP := network.AllocateGuestGlobalIP(projectIndex)
@@ -241,6 +248,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	elapsed := time.Since(start)
 	fmt.Println()
 	fmt.Printf("  ✓ Ready  %s  (%s)\n", projectName, elapsed.Round(time.Millisecond))
+	deployOK = true
 	fmt.Printf("  → SSH:  ssh root@%s\n", globalIP)
 	if dnsConfigured(cfg) {
 		fmt.Printf("  → SSH:  ssh root@%s\n", dnsDomain)

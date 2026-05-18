@@ -14,7 +14,7 @@ ROOTFS_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/u
 
 # SHA256 checksums for downloaded artifacts
 KERNEL_SHA256="22847375721aceea63d934c28f2dfce4670b6f52ec904fae19f5145a970c1e65"
-ROOTFS_SHA256="040927105bd01b19e7b02cd5da5a9552b428a7f84bd5ffc22ebfce4ddf258a07"
+ROOTFS_SHA256="137bb2f0f9c3a699ce0d25f6778571b885b90d84299d00df3274b4788383c86f"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
