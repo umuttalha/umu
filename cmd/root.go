@@ -23,6 +23,8 @@ dedicated IPv6, and SSH access.
   umut logs myserver        Tail VM console logs
   umut freeze myserver      Snapshot memory → stop VM
   umut unfreeze myserver    Restore from snapshot
+  umut push myserver        Archive VM disk to S3
+  umut load myserver        Restore VM from S3
   umut destroy myserver     Tear down a VM`,
 	SilenceUsage:  true,
 	SilenceErrors: true,

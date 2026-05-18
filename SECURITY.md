@@ -237,7 +237,7 @@ All SSH connections previously used `-o StrictHostKeyChecking=no -o UserKnownHos
 **Severity:** Medium  
 **Files:** `Makefile:14`, `update.sh:6`
 
-`Makefile` and `update.sh` contained `root@88.99.61.148` — exposing infrastructure IP in the public repo and risking accidental deployments.
+`Makefile` and `update.sh` contained hardcoded server IPs — exposing infrastructure details in the public repo and risking accidental deployments.
 
 **Fix implemented (2026-05-06):**
 - `Makefile`: Default `SERVER ?= root@localhost` with comments requiring explicit override

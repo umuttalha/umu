@@ -1,0 +1,84 @@
+# umut.toml — infrastructure config for umut
+# Copy to ~/.umut/umut.toml and fill in your credentials.
+# All fields are optional. Features activate when credentials are present.
+
+# ── S3 Storage (for umut push / umut load) ──────────────────────────
+# Supported providers: AWS S3, Cloudflare R2, Backblaze B2, MinIO, any S3-compatible.
+# Leave empty to disable S3 push/load.
+
+[storage]
+provider = "s3"                                          # always "s3"
+# ── Choose your provider and uncomment the matching lines ──
+
+# AWS S3:
+# endpoint = "https://s3.amazonaws.com"
+# bucket = "umut-backups"
+# access_key = "AKIAIOSFODNN7EXAMPLE"
+# secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+# region = "us-east-1"
+
+# Cloudflare R2 (free 10GB, no egress fees):
+# endpoint = "https://<account-id>.r2.cloudflarestorage.com"
+# bucket = "umut-backups"
+# access_key = "<r2-access-key-id>"
+# secret_key = "<r2-secret-access-key>"
+# region = "auto"                                        # R2 always uses "auto"
+
+# Backblaze B2 (free 10GB):
+# endpoint = "https://s3.us-west-004.backblazeb2.com"
+# bucket = "umut-backups"
+# access_key = "<b2-application-key-id>"
+# secret_key = "<b2-application-key>"
+# region = "us-west-004"
+
+
+# ── DNS (for automatic AAAA records) ─────────────────────────────────
+# Supported providers: Cloudflare.
+# Leave empty to disable DNS automation.
+
+[dns]
+provider = "cloudflare"                                  # always "cloudflare"
+# api_token = "<cloudflare-api-token>"                    # Create at https://dash.cloudflare.com/profile/api-tokens
+# zone_id = "<cloudflare-zone-id>"                        # Found in Cloudflare dashboard → zone overview (right sidebar)
+
+# How to get a Cloudflare API token:
+#   1. Go to https://dash.cloudflare.com/profile/api-tokens
+#   2. Create Token → "Edit zone DNS" template
+#   3. Select your zone (umut.space)
+#   4. Copy the token
+# How to get your zone ID:
+#   1. Go to your domain in Cloudflare dashboard
+#   2. Zone ID is in the right sidebar under "API"
+
+# ── How to get an R2 bucket ─────────────────────────────────────────
+#   1. Cloudflare Dashboard → R2 → Create bucket
+#   2. Manage R2 API Tokens → Create API token
+#   3. Copy Access Key ID and Secret Access Key
+#   4. Endpoint is: https://<account-id>.r2.cloudflarestorage.com
+#      Your account ID is in the Cloudflare dashboard URL or R2 overview.
+
+# ── How to get a B2 bucket ──────────────────────────────────────────
+#   1. Backblaze B2 → Create Bucket
+#   2. Application Keys → Add a New Application Key
+#   3. Copy keyID and applicationKey
+#   4. Endpoint is shown in the bucket details page.
+
+# ── Minimal working config (Cloudflare R2 + DNS) ─────────────────────
+# [[storage]
+# provider = "s3"
+# endpoint = "https://abc123.r2.cloudflarestorage.com"
+# bucket = "umut-backups"
+# access_key = "xxx"
+# secret_key = "xxx"
+# region = "auto"
+#
+# [dns]
+# provider = "cloudflare"
+# api_token = "xxx"
+# zone_id = "xxx"
+
+# ── Global IPv6 prefix (optional — for public VM IPs) ──────────────────
+# Set via environment variable UMUT_GLOBAL_PREFIX6, not in this file.
+# Add to /etc/systemd/system/umut.service:
+#   Environment=UMUT_GLOBAL_PREFIX6=2001:db8:abcd
+# This is your server's routed /64 prefix. VMs get public IPv6 from this.

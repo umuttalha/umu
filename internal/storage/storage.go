@@ -62,8 +62,12 @@ func ResizeDisk(diskPath string, sizeGB int) error {
 	if sizeGB <= 0 {
 		return nil
 	}
+	// Repair filesystem before resizing (disk may be dirty from VM kill)
+	cmd := exec.Command("e2fsck", "-f", "-y", diskPath)
+	cmd.CombinedOutput() // ignore errors, best-effort
+
 	// Grow sparse file
-	cmd := exec.Command("truncate", "-s", fmt.Sprintf("%dG", sizeGB), diskPath)
+	cmd = exec.Command("truncate", "-s", fmt.Sprintf("%dG", sizeGB), diskPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("truncate disk: %s: %w", string(output), err)
 	}

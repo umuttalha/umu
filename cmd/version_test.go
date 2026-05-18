@@ -75,6 +75,9 @@ func TestAllSubcommandsRegistered(t *testing.T) {
 		"top",
 		"exec",
 		"ssh",
+		"push",
+		"load",
+		"resize",
 		"daemon",
 	}
 

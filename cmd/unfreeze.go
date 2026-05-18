@@ -100,7 +100,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  [Service: %s]\n", svc.Name)
 		}
 
-		vmName := fmt.Sprintf("%s-%s", projectName, svc.Name)
+		vmName := fmt.Sprintf("%s-%s", proj.JailerName(projectName), svc.Name)
 		tapName := svc.TAPDevice
 		if tapName == "" {
 			tapName = network.TapName(projectName, svc.Name, 0)
@@ -117,7 +117,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 
 		extraDrives, volsMapping := rebuildDrives(svc)
 
-		vmName = fmt.Sprintf("%s-%s", projectName, svc.Name)
+		vmName = fmt.Sprintf("%s-%s", proj.JailerName(projectName), svc.Name)
 		snapshotName := vmName
 		usedSnapshot := false
 

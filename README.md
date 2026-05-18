@@ -4,7 +4,7 @@
 
 ```
 umut deploy myserver --cpus 2 --memory 4096 --disk 20
-ssh root@2a01:4f8:10a:dcc::3
+ssh root@<global-ipv6>
 ```
 
 ## What It Does
@@ -17,8 +17,9 @@ Turns a single bare-metal server into your own VM platform. Each `umut deploy` c
 - **SSH access** — static Dropbear with ED25519 host keys per VM
 - **Freeze/unfreeze** — snapshot memory to disk, restore in ~100ms
 - **Cgroups v2** — CPU, memory, I/O limits per VM
+- **Resizable disks** — grow VM disk online with `umut resize`
 
-**No Docker. No Kubernetes. No serverless.** Just Go + Firecracker + Caddy.
+**No Docker. No Kubernetes. No serverless.** Just Go + Firecracker.
 
 ## Quick Start
 
@@ -51,6 +52,9 @@ umut ssh myserver
 | `umut logs <name>` | Tail VM console logs |
 | `umut freeze <name>` | Snapshot memory → stop VM |
 | `umut unfreeze <name>` | Restore from snapshot (~100ms) |
+| `umut resize <name> --disk <GB>` | Grow VM disk, auto restart |
+| `umut push <name>` | Archive VM disk to S3 |
+| `umut load <name>` | Restore VM from S3 |
 | `umut destroy <name>` | Tear down and release resources |
 
 ### Deploy Flags
@@ -67,15 +71,16 @@ umut ssh myserver
 ## IPv6 Addressing
 
 ```
-Hetzner /64: 2a01:4f8:10a:dcc::/64
-  Host (enp5s0):   2a01:4f8:10a:dcc::2
+Your /64: 2001:db8:abcd::/64
+  Host (enp5s0):   2001:db8:abcd::2
   Bridge (br-umut): fd00:172:26::1/64
-  VM 0:             2a01:4f8:10a:dcc::3   +   fd00:172:26::2
-  VM 1:             2a01:4f8:10a:dcc::4   +   fd00:172:26::12
-  VM N:             2a01:4f8:10a:dcc::{3+N}  +   fd00:172:26::{N*10+2}
+  VM 0:             2001:db8:abcd::3   +   fd00:172:26::2
+  VM 1:             2001:db8:abcd::4   +   fd00:172:26::12
+  VM N:             2001:db8:abcd::{3+N}  +  fd00:172:26::{N*10+2}
 ```
 
 One VM = one project. Each VM gets a dedicated global IPv6 for direct SSH access.
+Set `UMUT_GLOBAL_PREFIX6` env var to your server's routed /64 prefix (e.g. `2001:db8:abcd`).
 
 ## Disk Layout
 
@@ -137,10 +142,41 @@ umut deploy myserver --cpus 2 --memory 4096 --disk 20
     ├─ 4. Create TAP interface, attach to br-umut bridge
     ├─ 5. Start Firecracker microVM inside jailer (chroot + seccomp)
     ├─ 6. Setup NDP proxy for global IPv6 access
-    └─ 7. Optionally add Caddy route (--port + --expose)
+    ├─ 7. Auto-create Cloudflare DNS AAAA record (if project name includes domain)
+    └─ 8. Optionally add Caddy route (--port + --expose)
 
 State: SQLite (state.db) — tracks VMs, IPs, PIDs
+Config: ~/.umut/umut.toml — S3 credentials + Cloudflare DNS API token
 ```
+
+## DNS & Custom Domains
+
+### Auto-DNS (umut.space subdomains)
+
+Deploy with a full domain name and umut auto-creates the AAAA record:
+
+```bash
+umut deploy cici.umut.space --cpus 2 --memory 4096
+ssh root@cici.umut.space  # resolves automatically
+```
+
+Requires `[dns]` section in `~/.umut/umut.toml` with Cloudflare API token + zone ID.
+
+### Custom Domains
+
+Deploy a VM, grab its global IPv6 from `umut list`, then add an AAAA record in Cloudflare pointing to that IP:
+
+```bash
+umut deploy myapp
+umut list            # → global IP: 2111:411:111:daa::2
+```
+
+In Cloudflare DNS, add:
+| Type | Name | Content |
+|------|------|---------|
+| AAAA | `app.example.com` | `2111:411:111:daa::2` |
+
+Traffic goes directly to the VM. Run your reverse proxy (nginx, Caddy, etc.) **inside the VM** — apt install anything you need. Add TLS via Let's Encrypt or Cloudflare proxying.
 
 ## License
 

@@ -76,7 +76,7 @@ type Service struct {
 	Version      int      `json:"version"`
 	MACAddress   string   `json:"mac_address"`
 	KernelArgs   string   `json:"kernel_args,omitempty"`
-	ServicePort  int      `json:"service_port"`
+	ServicePort  int    `json:"service_port"`
 }
 
 // Store manages persistent project state backed by SQLite.
@@ -205,9 +205,9 @@ func (s *Store) Register(p *Project) (int, error) {
 		return 0, err
 	}
 
-	var index int
-	s.db.QueryRow("SELECT COUNT(*) - 1 FROM projects").Scan(&index)
-	return index, nil
+	var rowID int64
+	s.db.QueryRow("SELECT rowid FROM projects WHERE name = ?", p.Name).Scan(&rowID)
+	return int(rowID - 1), nil
 }
 
 // Save persists a project.

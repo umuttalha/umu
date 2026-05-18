@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/umuttalha/umut/internal/compute"
+	"github.com/umuttalha/umut/internal/config"
 	"github.com/umuttalha/umut/internal/metadata"
 	"github.com/umuttalha/umut/internal/network"
 	proj "github.com/umuttalha/umut/internal/project"
@@ -160,8 +161,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("  ● Starting microVM (cpus=%d, mem=%dMB)...", deployCPUs, deployMemory)
+	vmName := fmt.Sprintf("%s-main", proj.JailerName(projectName))
 	vmCfg := compute.DefaultConfig(
-		fmt.Sprintf("%s-main", projectName),
+		vmName,
 		diskPath,
 		tapName,
 		guestIP,
@@ -220,10 +222,24 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save state: %w", err)
 	}
 
+	// DNS: auto-create AAAA record if configured
+	cfg, _ := config.Load()
+	if dnsConfigured(cfg) {
+		dnsClient := newDNSClient(cfg)
+		if dnsClient != nil {
+			if err := dnsClient.Setup(projectName, globalIP); err != nil {
+				fmt.Printf(" warning: DNS setup failed: %v\n", err)
+			}
+		}
+	}
+
 	elapsed := time.Since(start)
 	fmt.Println()
 	fmt.Printf("  ✓ Ready  %s  (%s)\n", projectName, elapsed.Round(time.Millisecond))
 	fmt.Printf("  → SSH:  ssh root@%s\n", globalIP)
+	if dnsConfigured(cfg) {
+		fmt.Printf("  → SSH:  ssh root@%s\n", projectName)
+	}
 	if svcState.Expose && deployPort > 0 {
 		fmt.Printf("  → HTTP: %s\n", proj.RouteHostname(projectName, "main"))
 	}

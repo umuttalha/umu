@@ -110,6 +110,7 @@ var (
 	DefaultKernelPath string
 	SocketDir         string
 	SharedRootImage   string
+	CNIGlobalPrefix6  string
 )
 
 func init() {
@@ -120,6 +121,8 @@ func init() {
 	DefaultKernelPath = filepath.Join(dataDir, "vmlinux")
 	SocketDir = filepath.Join(dataDir, "sockets")
 	SharedRootImage = filepath.Join(dataDir, "images", "python-base.ext4")
+
+	CNIGlobalPrefix6 = os.Getenv("UMUT_GLOBAL_PREFIX6")
 }
 
 const (
@@ -135,7 +138,6 @@ const (
 	CNINetworkName    = "umut"
 	CNIGateway        = "fd00:172:26::1"
 	CNISubnetBase     = "fd00:172:26"
-	CNIGlobalPrefix6  = "2a01:4f8:10a:dcc"
 
 	// Jailer configuration
 	JailerBaseDir  = "/srv/jailer"

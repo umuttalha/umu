@@ -38,3 +38,5 @@ umut-init-linux-amd64
 
 # Test artifacts
 e2e_test.sh
+
+umut.toml

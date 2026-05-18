@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/umuttalha/umut/internal/compute"
+	"github.com/umuttalha/umut/internal/config"
 	"github.com/umuttalha/umut/internal/network"
 	proj "github.com/umuttalha/umut/internal/project"
 	"github.com/umuttalha/umut/internal/routing"
@@ -120,6 +121,15 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 	// Clean up shared bridge if no TAPs remain
 	if network.CountTAPOnBridge() == 0 {
 		network.DestroySharedBridge()
+	}
+
+	// DNS: remove AAAA record if configured
+	cfg, _ := config.Load()
+	if dnsConfigured(cfg) {
+		dnsClient := newDNSClient(cfg)
+		if dnsClient != nil {
+			dnsClient.Teardown(projectName)
+		}
 	}
 
 	// Remove from state
