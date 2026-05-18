@@ -38,6 +38,7 @@ type VMConfig struct {
 	RootReadOnly   bool
 	TAPDevice      string
 	GuestIP        string
+	GuestIPv4      string
 	GuestGlobalIP  string
 	MACAddress     string
 	VCPUs          int
@@ -65,6 +66,9 @@ func BuildKernelArgs(cfg VMConfig) (string, error) {
 		rootFlag = "root=/dev/vda ro"
 	}
 	kernelArgs := "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.force_probe=1 " + rootFlag + " umut.ip=" + cfg.GuestIP + " umut.gw=" + CNIGateway
+	if cfg.GuestIPv4 != "" {
+		kernelArgs += " umut.ipv4=" + cfg.GuestIPv4 + " umut.gw4=" + IPv4Gateway
+	}
 	if cfg.GuestGlobalIP != "" {
 		kernelArgs += " umut.global_ip=" + cfg.GuestGlobalIP
 	}
@@ -138,6 +142,8 @@ const (
 	CNINetworkName    = "umut"
 	CNIGateway        = "fd00:172:26::1"
 	CNISubnetBase     = "fd00:172:26"
+	IPv4Gateway       = "172.26.0.1"
+	IPv4SubnetBase    = "172.26"
 
 	// Jailer configuration
 	JailerBaseDir  = "/srv/jailer"
@@ -152,6 +158,8 @@ func BuildMetadataJSON(cfg VMConfig, env map[string]string) ([]byte, error) {
 	payload := struct {
 		GuestIP   string            `json:"ip"`
 		GatewayIP string            `json:"gw"`
+		IPv4Addr  string            `json:"ipv4,omitempty"`
+		IPv4GW    string            `json:"gw4,omitempty"`
 		Hosts     string            `json:"hosts,omitempty"`
 		Volumes   string            `json:"volumes,omitempty"`
 		Env       map[string]string `json:"env,omitempty"`
@@ -159,6 +167,8 @@ func BuildMetadataJSON(cfg VMConfig, env map[string]string) ([]byte, error) {
 	}{
 		GuestIP:   cfg.GuestIP,
 		GatewayIP: CNIGateway,
+		IPv4Addr:  cfg.GuestIPv4,
+		IPv4GW:    IPv4Gateway,
 		Hosts:     cfg.HostsMapping,
 		Volumes:   cfg.VolumesMapping,
 		Env:       env,

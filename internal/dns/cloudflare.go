@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 )
 
 type Client struct {
@@ -77,9 +76,6 @@ type createResponse struct {
 func (c *Client) Setup(projectName, ipv6 string) error {
 	// Check if AAAA record already exists
 	fullName := projectName
-	if !strings.Contains(projectName, ".") {
-		return fmt.Errorf("project name %q must include domain (e.g. cici.umut.space)", projectName)
-	}
 
 	listBody, err := c.do("GET", fmt.Sprintf("/zones/%s/dns_records?type=AAAA&name=%s", c.zoneID, fullName), nil)
 	if err != nil {
@@ -117,9 +113,6 @@ func (c *Client) Setup(projectName, ipv6 string) error {
 
 func (c *Client) Teardown(projectName string) error {
 	fullName := projectName
-	if !strings.Contains(projectName, ".") {
-		return nil // skip if no domain in name
-	}
 
 	listBody, err := c.do("GET", fmt.Sprintf("/zones/%s/dns_records?type=AAAA&name=%s", c.zoneID, fullName), nil)
 	if err != nil {

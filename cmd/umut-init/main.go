@@ -38,6 +38,11 @@ func main() {
 		setupNetworking(ip, gw, hosts)
 	}
 
+	ipv4, gw4 := parseCmdlineIPv4()
+	if ipv4 != "" && gw4 != "" {
+		setupIPv4Networking(ipv4, gw4)
+	}
+
 	// Apply global IPv6 AFTER main networking is up (eth0 must exist)
 	applyGlobalIPv6FromCmdline()
 
@@ -133,9 +138,9 @@ func parseCmdline() (ip, gw, hosts, vols, mode string) {
 
 	fields := strings.Fields(string(data))
 	for _, field := range fields {
-		if strings.HasPrefix(field, "umut.ip=") {
+		if strings.HasPrefix(field, "umut.ip=") && !strings.HasPrefix(field, "umut.ipv4=") {
 			ip = strings.TrimPrefix(field, "umut.ip=")
-		} else if strings.HasPrefix(field, "umut.gw=") {
+		} else if strings.HasPrefix(field, "umut.gw=") && !strings.HasPrefix(field, "umut.gw4=") {
 			gw = strings.TrimPrefix(field, "umut.gw=")
 		} else if strings.HasPrefix(field, "umut.hosts=") {
 			hosts = strings.TrimPrefix(field, "umut.hosts=")
@@ -143,6 +148,21 @@ func parseCmdline() (ip, gw, hosts, vols, mode string) {
 			vols = strings.TrimPrefix(field, "umut.vols=")
 		} else if strings.HasPrefix(field, "umut.mode=") {
 			mode = strings.TrimPrefix(field, "umut.mode=")
+		}
+	}
+	return
+}
+
+func parseCmdlineIPv4() (ipv4, gw4 string) {
+	data, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return
+	}
+	for _, field := range strings.Fields(string(data)) {
+		if strings.HasPrefix(field, "umut.ipv4=") {
+			ipv4 = strings.TrimPrefix(field, "umut.ipv4=")
+		} else if strings.HasPrefix(field, "umut.gw4=") {
+			gw4 = strings.TrimPrefix(field, "umut.gw4=")
 		}
 	}
 	return
@@ -252,6 +272,29 @@ func applyGlobalIPv6FromCmdline() {
 	}
 }
 
+func setupIPv4Networking(ipv4, gw4 string) {
+	log.Printf("[umut-init] Configuring IPv4: IP=%s/16 GW=%s\n", ipv4, gw4)
+
+	link, err := netlink.LinkByName("eth0")
+	if err != nil {
+		log.Println("[umut-init] error finding eth0 for IPv4:", err)
+		return
+	}
+
+	addr, _ := netlink.ParseAddr(ipv4 + "/16")
+	if err := netlink.AddrAdd(link, addr); err != nil {
+		log.Println("[umut-init] error adding IPv4 address:", err)
+	}
+
+	gwIP := net.ParseIP(gw4)
+	route := &netlink.Route{
+		Gw: gwIP,
+	}
+	if err := netlink.RouteAdd(route); err != nil {
+		log.Println("[umut-init] error adding IPv4 default route:", err)
+	}
+}
+
 func setupNetworking(ip, gw, hosts string) {
 	isIPv6 := strings.Contains(ip, ":")
 	prefixLen := "/16"
@@ -296,7 +339,7 @@ func setupNetworking(ip, gw, hosts string) {
 
 	var resolvContent string
 	if isIPv6 {
-		resolvContent = "nameserver 2606:4700:4700::1111\nnameserver 2606:4700:4700::1001\n"
+		resolvContent = "nameserver 2606:4700:4700::1111\nnameserver 2606:4700:4700::1001\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n"
 	} else {
 		resolvContent = fmt.Sprintf("nameserver %s\n", gw)
 	}

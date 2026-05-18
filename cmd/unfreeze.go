@@ -143,6 +143,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 				mem = 256
 			}
 			vmCfg.GuestGlobalIP = svc.GlobalIP
+			vmCfg.GuestIPv4 = svc.GuestIPv4
 			vmCfg.VCPUs = cpus
 			vmCfg.MemoryMB = mem
 			vmCfg.RootReadOnly = svc.RootReadOnly
@@ -187,6 +188,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 				mem = 256
 			}
 			vmCfg.GuestGlobalIP = svc.GlobalIP
+			vmCfg.GuestIPv4 = svc.GuestIPv4
 			vmCfg.VCPUs = cpus
 			vmCfg.MemoryMB = mem
 			vmCfg.RootReadOnly = svc.RootReadOnly

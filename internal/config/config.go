@@ -18,9 +18,10 @@ type StorageConfig struct {
 }
 
 type DNSConfig struct {
-	Provider string `toml:"provider"`
-	APIToken string `toml:"api_token"`
-	ZoneID   string `toml:"zone_id"`
+	Provider   string `toml:"provider"`
+	APIToken   string `toml:"api_token"`
+	ZoneID     string `toml:"zone_id"`
+	BaseDomain string `toml:"base_domain"`
 }
 
 type Config struct {

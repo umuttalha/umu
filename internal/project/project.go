@@ -29,6 +29,13 @@ func RouteHostname(projectName, serviceName string) string {
 	return fmt.Sprintf("%s-%s", serviceName, projectName)
 }
 
+func FQDN(projectName, baseDomain string) string {
+	if strings.Contains(projectName, ".") || baseDomain == "" {
+		return projectName
+	}
+	return projectName + "." + baseDomain
+}
+
 func DataDir() string {
 	dataDir := os.Getenv("UMUT_DATA_DIR")
 	if dataDir == "" {

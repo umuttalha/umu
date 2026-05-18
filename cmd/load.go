@@ -114,6 +114,7 @@ func runLoad(cmd *cobra.Command, args []string) error {
 	}
 
 	guestIP := network.AllocateGuestIP(projectIndex, 0)
+	guestIPv4 := network.AllocateGuestIPv4(projectIndex)
 	globalIP := network.AllocateGuestGlobalIP(projectIndex)
 	mac := network.GenerateMAC(projectIndex, 0)
 	tapName := network.TapName(projectName, "main", 0)
@@ -139,6 +140,7 @@ func runLoad(cmd *cobra.Command, args []string) error {
 		Version:     1,
 		TAPDevice:   tapName,
 		GuestIP:     guestIP,
+		GuestIPv4:   guestIPv4,
 		GlobalIP:    globalIP,
 		MACAddress:  mac,
 		ServicePort: 0,
@@ -155,6 +157,7 @@ func runLoad(cmd *cobra.Command, args []string) error {
 		mac,
 	)
 	vmCfg.GuestGlobalIP = globalIP
+	vmCfg.GuestIPv4 = guestIPv4
 	vmCfg.VCPUs = cpus
 	vmCfg.MemoryMB = memory
 	vmCfg.HostsMapping = fmt.Sprintf("%s:main", guestIP)

@@ -84,6 +84,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	guestIP := network.AllocateGuestIP(projectIndex, 0)
+	guestIPv4 := network.AllocateGuestIPv4(projectIndex)
 	globalIP := network.AllocateGuestGlobalIP(projectIndex)
 	mac := network.GenerateMAC(projectIndex, 0)
 	tapName := network.TapName(projectName, "main", 0)
@@ -147,6 +148,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		Version:     1,
 		TAPDevice:   tapName,
 		GuestIP:     guestIP,
+		GuestIPv4:   guestIPv4,
 		GlobalIP:    globalIP,
 		MACAddress:  mac,
 		ServicePort: deployPort,
@@ -170,6 +172,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		mac,
 	)
 	vmCfg.GuestGlobalIP = globalIP
+	vmCfg.GuestIPv4 = guestIPv4
 	vmCfg.VCPUs = deployCPUs
 	vmCfg.MemoryMB = deployMemory
 	vmCfg.HostsMapping = fmt.Sprintf("%s:main", guestIP)
@@ -208,7 +211,8 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	// Configure Caddy route if exposed
 	if svcState.Expose && deployPort > 0 {
 		fmt.Printf("  ● Configuring proxy...")
-		routeHostname := proj.RouteHostname(projectName, "main")
+		cfg, _ := config.Load()
+		routeHostname := proj.RouteHostname(proj.FQDN(projectName, cfg.DNS.BaseDomain), "main")
 		if err := routing.AddRoute(routeHostname, svcState.GuestIP, deployPort); err != nil {
 			fmt.Printf(" warning: caddy route failed: %v\n", err)
 		} else {
@@ -224,10 +228,11 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	// DNS: auto-create AAAA record if configured
 	cfg, _ := config.Load()
+	dnsDomain := proj.FQDN(projectName, cfg.DNS.BaseDomain)
 	if dnsConfigured(cfg) {
 		dnsClient := newDNSClient(cfg)
 		if dnsClient != nil {
-			if err := dnsClient.Setup(projectName, globalIP); err != nil {
+			if err := dnsClient.Setup(dnsDomain, globalIP); err != nil {
 				fmt.Printf(" warning: DNS setup failed: %v\n", err)
 			}
 		}
@@ -238,10 +243,10 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  ✓ Ready  %s  (%s)\n", projectName, elapsed.Round(time.Millisecond))
 	fmt.Printf("  → SSH:  ssh root@%s\n", globalIP)
 	if dnsConfigured(cfg) {
-		fmt.Printf("  → SSH:  ssh root@%s\n", projectName)
+		fmt.Printf("  → SSH:  ssh root@%s\n", dnsDomain)
 	}
 	if svcState.Expose && deployPort > 0 {
-		fmt.Printf("  → HTTP: %s\n", proj.RouteHostname(projectName, "main"))
+		fmt.Printf("  → HTTP: %s\n", proj.RouteHostname(dnsDomain, "main"))
 	}
 
 	return nil

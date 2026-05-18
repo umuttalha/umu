@@ -93,7 +93,8 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 
 		// 3. Remove Routes
 		if svc.Expose {
-			routeHostname := proj.RouteHostname(projectName, svc.Name)
+			cfg, _ := config.Load()
+			routeHostname := proj.RouteHostname(proj.FQDN(projectName, cfg.DNS.BaseDomain), svc.Name)
 			fmt.Printf("  ● Removing route %s...", routeHostname)
 			if err := routing.RemoveRoute(routeHostname); err != nil {
 				fmt.Printf(" warning: %v\n", err)
@@ -128,7 +129,7 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 	if dnsConfigured(cfg) {
 		dnsClient := newDNSClient(cfg)
 		if dnsClient != nil {
-			dnsClient.Teardown(projectName)
+			dnsClient.Teardown(proj.FQDN(projectName, cfg.DNS.BaseDomain))
 		}
 	}
 

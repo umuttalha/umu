@@ -40,6 +40,7 @@ provider = "s3"                                          # always "s3"
 provider = "cloudflare"                                  # always "cloudflare"
 # api_token = "<cloudflare-api-token>"                    # Create at https://dash.cloudflare.com/profile/api-tokens
 # zone_id = "<cloudflare-zone-id>"                        # Found in Cloudflare dashboard → zone overview (right sidebar)
+# base_domain = "example.com"                              # Optional: auto-appended to short project names for DNS/Caddy
 
 # How to get a Cloudflare API token:
 #   1. Go to https://dash.cloudflare.com/profile/api-tokens

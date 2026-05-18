@@ -145,6 +145,7 @@ func runResize(cmd *cobra.Command, args []string) error {
 		mem = 256
 	}
 	vmCfg.GuestGlobalIP = svc.GlobalIP
+	vmCfg.GuestIPv4 = svc.GuestIPv4
 	vmCfg.VCPUs = cpus
 	vmCfg.MemoryMB = mem
 	vmCfg.HostsMapping = fmt.Sprintf("%s:%s", svc.GuestIP, svc.Name)

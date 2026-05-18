@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	SubnetBase   = compute.CNISubnetBase
-	SharedBridge = "br-umut"
+	SubnetBase     = compute.CNISubnetBase
+	IPv4SubnetBase = "172.26"
+	SharedBridge   = "br-umut"
 )
 
 var HostInterface = "eth0"
@@ -40,8 +41,10 @@ func EnsureSharedBridge() {
 	if err := run("ip", "link", "show", SharedBridge); err != nil {
 		run("ip", "link", "add", "name", SharedBridge, "type", "bridge")
 		run("ip", "addr", "add", compute.CNIGateway+"/64", "dev", SharedBridge)
+		run("ip", "addr", "add", compute.IPv4Gateway+"/16", "dev", SharedBridge)
 		run("ip", "link", "set", "dev", SharedBridge, "up")
 		run("sysctl", "-w", "net.ipv6.conf.all.forwarding=1")
+		run("sysctl", "-w", "net.ipv4.ip_forward=1")
 		// IPv6 firewall: allow established/related, VM outbound, inter-VM, drop rest
 		run("ip6tables", "-A", "FORWARD", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
 		run("ip6tables", "-A", "FORWARD", "-s", compute.CNISubnetBase+"::/64", "-p", "udp", "--dport", "53", "-j", "ACCEPT")
@@ -53,6 +56,19 @@ func EnsureSharedBridge() {
 		// Allow external SSH to VMs via global IPv6 (direct access without bare metal hop)
 		run("ip6tables", "-A", "FORWARD", "-d", compute.CNIGlobalPrefix6+"::/64", "-p", "tcp", "--dport", "22", "-j", "ACCEPT")
 		run("ip6tables", "-A", "FORWARD", "-d", compute.CNIGlobalPrefix6+"::/64", "-p", "tcp", "--dport", "9999", "-j", "ACCEPT")
+		// INPUT chain: block VM→host traffic except metadata service + ICMPv6 + established
+		run("ip6tables", "-I", "INPUT", "1", "-i", SharedBridge, "-p", "icmpv6", "-j", "ACCEPT")
+		run("ip6tables", "-I", "INPUT", "2", "-i", SharedBridge, "-p", "tcp", "-d", compute.CNIGateway, "--dport", "9071", "-j", "ACCEPT")
+		run("ip6tables", "-I", "INPUT", "3", "-i", SharedBridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+		run("ip6tables", "-I", "INPUT", "4", "-i", SharedBridge, "-j", "DROP")
+		// IPv4 INPUT: block VM→host except ICMP + established response traffic
+		run("iptables", "-I", "INPUT", "1", "-i", SharedBridge, "-p", "icmp", "-j", "ACCEPT")
+		run("iptables", "-I", "INPUT", "2", "-i", SharedBridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+		run("iptables", "-I", "INPUT", "3", "-i", SharedBridge, "-j", "DROP")
+		// IPv4: allow VMs to reach internet via NAT
+		run("iptables", "-A", "FORWARD", "-s", compute.IPv4SubnetBase+".0.0/16", "-j", "ACCEPT")
+		run("iptables", "-A", "FORWARD", "-d", compute.IPv4SubnetBase+".0.0/16", "-j", "ACCEPT")
+		run("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", compute.IPv4SubnetBase+".0.0/16", "!", "-d", compute.IPv4SubnetBase+".0.0/16", "-j", "MASQUERADE")
 	}
 }
 
@@ -64,6 +80,12 @@ func AllocateGuestIP(projectIndex, serviceIndex int) string {
 // The host uses ::2, so VMs start at ::3. One global IP per project.
 func AllocateGuestGlobalIP(projectIndex int) string {
 	return fmt.Sprintf("%s::%d", compute.CNIGlobalPrefix6, 3+projectIndex)
+}
+
+// AllocateGuestIPv4 assigns a private IPv4 address from 172.26.0.0/16.
+// Each project gets its own /24-subset: 172.26.{projectIndex}.2
+func AllocateGuestIPv4(projectIndex int) string {
+	return fmt.Sprintf("%s.%d.2", IPv4SubnetBase, projectIndex)
 }
 
 // SetupNDPProxy configures NDP (Neighbor Discovery Protocol) proxying on the host
@@ -133,6 +155,17 @@ func EnsureTAP(tapName string) error {
 
 func DestroySharedBridge() error {
 	run("ip6tables", "-F", "FORWARD")
+	run("iptables", "-F", "FORWARD")
+	run("iptables", "-t", "nat", "-F", "POSTROUTING")
+	// Remove br-umut IPv6 INPUT rules
+	run("ip6tables", "-D", "INPUT", "-i", SharedBridge, "-p", "icmpv6", "-j", "ACCEPT")
+	run("ip6tables", "-D", "INPUT", "-i", SharedBridge, "-p", "tcp", "-d", compute.CNIGateway, "--dport", "9071", "-j", "ACCEPT")
+	run("ip6tables", "-D", "INPUT", "-i", SharedBridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+	run("ip6tables", "-D", "INPUT", "-i", SharedBridge, "-j", "DROP")
+	// Remove br-umut IPv4 INPUT rules
+	run("iptables", "-D", "INPUT", "-i", SharedBridge, "-p", "icmp", "-j", "ACCEPT")
+	run("iptables", "-D", "INPUT", "-i", SharedBridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+	run("iptables", "-D", "INPUT", "-i", SharedBridge, "-j", "DROP")
 	return run("ip", "link", "del", SharedBridge)
 }
 
