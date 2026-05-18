@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/compute"
-	"github.com/umuttalha/umut/internal/config"
-	"github.com/umuttalha/umut/internal/metadata"
-	"github.com/umuttalha/umut/internal/network"
-	proj "github.com/umuttalha/umut/internal/project"
-	"github.com/umuttalha/umut/internal/routing"
-	"github.com/umuttalha/umut/internal/state"
-	"github.com/umuttalha/umut/internal/storage"
+	"github.com/umuttalha/umu/internal/compute"
+	"github.com/umuttalha/umu/internal/config"
+	"github.com/umuttalha/umu/internal/metadata"
+	"github.com/umuttalha/umu/internal/network"
+	proj "github.com/umuttalha/umu/internal/project"
+	"github.com/umuttalha/umu/internal/routing"
+	"github.com/umuttalha/umu/internal/state"
+	"github.com/umuttalha/umu/internal/storage"
 )
 
 var (
@@ -32,9 +32,9 @@ var deployCmd = &cobra.Command{
 	Long: `Deploy creates a new Firecracker microVM with a cloned Ubuntu rootfs.
 
 Example:
-  umut deploy myserver
-  umut deploy myapp --cpus 2 --memory 4096 --disk 20
-  umut deploy blog.umut.space --ssh-key ~/.ssh/mykey.pub`,
+  umu deploy myserver
+  umu deploy myapp --cpus 2 --memory 4096 --disk 20
+  umu deploy blog.umu.space --ssh-key ~/.ssh/mykey.pub`,
 	Args: cobra.ExactArgs(1),
 	RunE: runDeploy,
 }
@@ -65,7 +65,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	// Check if project already exists
 	if existing, exists := store.Get(projectName); exists {
-		return fmt.Errorf("project %q already exists (status=%s) — run 'umut destroy %s' first", projectName, existing.Status, projectName)
+		return fmt.Errorf("project %q already exists (status=%s) — run 'umu destroy %s' first", projectName, existing.Status, projectName)
 	}
 
 	fmt.Printf("  Deploying %s\n", projectName)
@@ -113,7 +113,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Inject umut-init as PID 1
+	// Inject umu-init as PID 1
 	if err := storage.InjectInit(diskPath); err != nil {
 		network.DestroyTAP(tapName)
 		storage.DeleteDisk(projectName)
@@ -262,7 +262,7 @@ func injectSSHAuthorizedKeys(diskPath string, keyPath string) error {
 		home, _ = os.UserHomeDir()
 	}
 	if home != "" {
-		paths = append(paths, filepath.Join(home, ".umut", "ssh_key"))
+		paths = append(paths, filepath.Join(home, ".umu", "ssh_key"))
 		paths = append(paths, filepath.Join(home, ".ssh", "id_ed25519.pub"))
 		paths = append(paths, filepath.Join(home, ".ssh", "id_rsa.pub"))
 	}

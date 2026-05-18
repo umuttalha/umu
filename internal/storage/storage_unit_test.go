@@ -6,26 +6,26 @@ import (
 )
 
 func TestImagesDirDefault(t *testing.T) {
-	os.Unsetenv("UMUT_DATA_DIR")
+	os.Unsetenv("UMU_DATA_DIR")
 
 	oldDir := ImagesDir
 	initImagesDir()
 	defer func() { ImagesDir = oldDir }()
 
-	if got := ImagesDir; got != "/var/lib/umut/images" {
-		t.Errorf("expected /var/lib/umut/images, got %s", got)
+	if got := ImagesDir; got != "/var/lib/umu/images" {
+		t.Errorf("expected /var/lib/umu/images, got %s", got)
 	}
 }
 
 func TestConfigurableImagesDir(t *testing.T) {
-	t.Setenv("UMUT_DATA_DIR", "/custom/umut")
+	t.Setenv("UMU_DATA_DIR", "/custom/umu")
 
 	oldDir := ImagesDir
 	initImagesDir()
 	defer func() { ImagesDir = oldDir }()
 
-	if got := ImagesDir; got != "/custom/umut/images" {
-		t.Errorf("expected /custom/umut/images, got %s", got)
+	if got := ImagesDir; got != "/custom/umu/images" {
+		t.Errorf("expected /custom/umu/images, got %s", got)
 	}
 }
 
@@ -50,7 +50,7 @@ func TestResizeDisk_NegativeSizeNoop(t *testing.T) {
 }
 
 func TestResizeDisk_NonexistentFile(t *testing.T) {
-	err := ResizeDisk("/tmp/umut-test-nonexistent-12345.ext4", 1)
+	err := ResizeDisk("/tmp/umu-test-nonexistent-12345.ext4", 1)
 	if err == nil {
 		t.Fatal("expected error for nonexistent file")
 	}

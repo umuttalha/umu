@@ -37,9 +37,9 @@ func FQDN(projectName, baseDomain string) string {
 }
 
 func DataDir() string {
-	dataDir := os.Getenv("UMUT_DATA_DIR")
+	dataDir := os.Getenv("UMU_DATA_DIR")
 	if dataDir == "" {
-		dataDir = "/var/lib/umut"
+		dataDir = "/var/lib/umu"
 	}
 	return dataDir
 }

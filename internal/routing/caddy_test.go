@@ -13,7 +13,7 @@ import (
 
 func TestCaddyRoutingIntegration(t *testing.T) {
 	// This test requires Caddy to be running on the host and its Admin API accessible at :2019
-	projectName := "testroute.umut.space"
+	projectName := "testroute.umu.space"
 	targetIP := "10.0.0.2"
 	targetPort := 8080
 
@@ -27,7 +27,7 @@ func TestCaddyRoutingIntegration(t *testing.T) {
 
 	// 2. Verify Route exists in Caddy (Query Admin API directly)
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://localhost:2019/config/apps/http/servers/umut/routes")
+	resp, err := client.Get("http://localhost:2019/config/apps/http/servers/umu/routes")
 	if err != nil {
 		t.Fatalf("failed to query caddy API: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestCaddyRoutingIntegration(t *testing.T) {
 }
 
 func TestUpdateRouteIntegration(t *testing.T) {
-	projectName := "testupdate.umut.space"
+	projectName := "testupdate.umu.space"
 	initialIP := "10.0.0.10"
 	updatedIP := "10.0.0.20"
 	targetPort := 8080

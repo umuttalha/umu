@@ -28,7 +28,7 @@ func TestVersionOutputFormat(t *testing.T) {
 
 	output := buf.String()
 	checks := []string{
-		"umut 1.0.0",
+		"umu 1.0.0",
 		"commit:  abc1234",
 		"built:   2026-01-01T00:00:00Z",
 		"go:      " + runtime.Version(),

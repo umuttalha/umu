@@ -161,7 +161,7 @@ func deleteJSON(root interface{}, parts []string) {
 }
 
 func checkPortConflict(apps interface{}, serverPath []string, newListen []interface{}) error {
-	// serverPath is like ["config", "apps", "http", "servers", "umut"]
+	// serverPath is like ["config", "apps", "http", "servers", "umu"]
 	// We're checking if any server already uses a port in newListen
 	httpCfg, _ := navigateJSON(apps, []string{"http"}).(map[string]interface{})
 	if httpCfg == nil {
@@ -209,15 +209,15 @@ func TestEnsureServer_CreatesWhenNull(t *testing.T) {
 		t.Fatalf("EnsureServer should not error, got: %v", err)
 	}
 
-	// Verify the umut server was created
-	sv := navigateJSON(state.apps, []string{"http", "servers", "umut"})
+	// Verify the umu server was created
+	sv := navigateJSON(state.apps, []string{"http", "servers", "umu"})
 	if sv == nil {
-		t.Fatal("expected umut server to be created, got nil")
+		t.Fatal("expected umu server to be created, got nil")
 	}
 
 	svMap, ok := sv.(map[string]interface{})
 	if !ok {
-		t.Fatal("umut server is not a map")
+		t.Fatal("umu server is not a map")
 	}
 
 	listen, _ := svMap["listen"].([]interface{})
@@ -234,8 +234,8 @@ func TestEnsureServer_CreatesWhenNull(t *testing.T) {
 
 func TestEnsureServer_DoesNotOverwriteWhenExists(t *testing.T) {
 	state := newSavedCaddyState()
-	// Pre-create the umut server with custom config
-	setJSON(state.apps, []string{"http", "servers", "umut"}, map[string]interface{}{
+	// Pre-create the umu server with custom config
+	setJSON(state.apps, []string{"http", "servers", "umu"}, map[string]interface{}{
 		"listen": []interface{}{":80"},
 		"routes": []interface{}{
 			map[string]interface{}{"@id": "existing-route"},
@@ -249,7 +249,7 @@ func TestEnsureServer_DoesNotOverwriteWhenExists(t *testing.T) {
 		t.Fatalf("EnsureServer should not error, got: %v", err)
 	}
 
-	sv := navigateJSON(state.apps, []string{"http", "servers", "umut"})
+	sv := navigateJSON(state.apps, []string{"http", "servers", "umu"})
 	svMap := sv.(map[string]interface{})
 	routes := svMap["routes"].([]interface{})
 	if len(routes) != 1 {
@@ -272,12 +272,12 @@ func TestEnsureServer_Port443ConflictWithSrv0(t *testing.T) {
 	}
 
 	// Confirm :80 was used, not :443
-	sv := navigateJSON(state.apps, []string{"http", "servers", "umut"})
+	sv := navigateJSON(state.apps, []string{"http", "servers", "umu"})
 	svMap := sv.(map[string]interface{})
 	listen := svMap["listen"].([]interface{})
 	for _, l := range listen {
 		if l == ":443" {
-			t.Error("umut server must not listen on :443 (already claimed by srv0)")
+			t.Error("umu server must not listen on :443 (already claimed by srv0)")
 		}
 	}
 }
@@ -304,10 +304,10 @@ func TestAddRoute_PostEnsuresServerFirst(t *testing.T) {
 	}
 
 	// Verify the route was added
-	routes := navigateJSON(state.apps, []string{"http", "servers", "umut", "routes"})
+	routes := navigateJSON(state.apps, []string{"http", "servers", "umu", "routes"})
 	routesArr, ok := routes.([]interface{})
 	if !ok || len(routesArr) == 0 {
-		t.Fatal("expected route to be added to umut server")
+		t.Fatal("expected route to be added to umu server")
 	}
 
 	found := false
@@ -325,8 +325,8 @@ func TestAddRoute_PostEnsuresServerFirst(t *testing.T) {
 
 func TestAddRoute_ExistingServerReused(t *testing.T) {
 	state := newSavedCaddyState()
-	// Pre-create umut server with an existing route
-	setJSON(state.apps, []string{"http", "servers", "umut"}, map[string]interface{}{
+	// Pre-create umu server with an existing route
+	setJSON(state.apps, []string{"http", "servers", "umu"}, map[string]interface{}{
 		"listen": []interface{}{":80"},
 		"routes": []interface{}{
 			map[string]interface{}{"@id": "route-existing"},
@@ -339,7 +339,7 @@ func TestAddRoute_ExistingServerReused(t *testing.T) {
 		t.Fatalf("AddRoute should not error, got: %v", err)
 	}
 
-	routes := navigateJSON(state.apps, []string{"http", "servers", "umut", "routes"})
+	routes := navigateJSON(state.apps, []string{"http", "servers", "umu", "routes"})
 	routesArr := routes.([]interface{})
 
 	// Both old and new routes should exist (AddRoute calls RemoveRoute first

@@ -29,7 +29,7 @@ type Metadata struct {
 	GlobalIP   string    `json:"global_ip"`
 	CreatedAt  time.Time `json:"created_at"`
 	ArchivedAt time.Time `json:"archived_at"`
-	UmutVersion string   `json:"umut_version"`
+	UmuVersion string   `json:"umu_version"`
 }
 
 func New(endpoint, accessKey, secretKey, bucket, region string) (*Client, error) {
@@ -159,7 +159,7 @@ func (c *Client) Pull(projectName, destPath string) (*Metadata, error) {
 		return nil, fmt.Errorf("rename disk: %w", err)
 	}
 
-	os.Chown(destPath, 1000, 1000) // umut:umut for Firecracker jailer
+	os.Chown(destPath, 1000, 1000) // umu:umu for Firecracker jailer
 	os.Chmod(destPath, 0640)
 
 	return &meta, nil
@@ -192,9 +192,9 @@ func (c *Client) List() ([]string, error) {
 }
 
 func DiskPath(projectName string) string {
-	dir := os.Getenv("UMUT_DATA_DIR")
+	dir := os.Getenv("UMU_DATA_DIR")
 	if dir == "" {
-		dir = "/var/lib/umut"
+		dir = "/var/lib/umu"
 	}
 	return filepath.Join(dir, "images", projectName+".ext4")
 }

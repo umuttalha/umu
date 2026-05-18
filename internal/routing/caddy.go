@@ -23,12 +23,12 @@ type Route struct {
 	Port        int
 }
 
-// EnsureServer makes sure the Caddy HTTP server config exists for umut.
+// EnsureServer makes sure the Caddy HTTP server config exists for umu.
 func EnsureServer() error {
 	// Check if the server already exists.
 	// Caddy returns 200 + "null" body when the key exists in the config tree
 	// but has no value — meaning the server has NOT been created yet.
-	resp, err := http.Get(CaddyAdminAPI + "/config/apps/http/servers/umut")
+	resp, err := http.Get(CaddyAdminAPI + "/config/apps/http/servers/umu")
 	if err != nil {
 		return fmt.Errorf("caddy API request: %w", err)
 	}
@@ -50,7 +50,7 @@ func EnsureServer() error {
 	}
 
 	// PUT to the specific server path so we don't wipe existing srv0 config.
-	req, err := http.NewRequest(http.MethodPut, CaddyAdminAPI+"/config/apps/http/servers/umut", bytes.NewReader(appsBody))
+	req, err := http.NewRequest(http.MethodPut, CaddyAdminAPI+"/config/apps/http/servers/umu", bytes.NewReader(appsBody))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -73,7 +73,7 @@ func EnsureServer() error {
 // AddRoute configures Caddy to route traffic for a project's FQDN to its VM.
 // Deletes any existing route with the same ID first to avoid duplicate route errors.
 func AddRoute(domain, vmIP string, port int) error {
-	// Ensure the umut server exists in Caddy config
+	// Ensure the umu server exists in Caddy config
 	if err := EnsureServer(); err != nil {
 		return fmt.Errorf("ensure caddy server: %w", err)
 	}
@@ -105,7 +105,7 @@ func AddRoute(domain, vmIP string, port int) error {
 	}
 
 	// Append route to the server's route list
-	url := CaddyAdminAPI + "/config/apps/http/servers/umut/routes"
+	url := CaddyAdminAPI + "/config/apps/http/servers/umu/routes"
 	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("caddy API request: %w", err)
@@ -180,7 +180,7 @@ func RemoveRoute(projectName string) error {
 
 // ListRoutes retrieves all project routes from Caddy.
 func ListRoutes() ([]Route, error) {
-	url := CaddyAdminAPI + "/config/apps/http/servers/umut/routes"
+	url := CaddyAdminAPI + "/config/apps/http/servers/umu/routes"
 
 	resp, err := http.Get(url)
 	if err != nil {

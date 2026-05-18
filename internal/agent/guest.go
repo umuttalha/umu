@@ -36,12 +36,12 @@ func RunGuestAgent(port int) error {
 	}
 	defer ln.Close()
 
-	log.Printf("[umut-agent] Listening on %s", addr)
+	log.Printf("[umu-agent] Listening on %s", addr)
 
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Printf("[umut-agent] Accept error: %v", err)
+			log.Printf("[umu-agent] Accept error: %v", err)
 			continue
 		}
 		go handleAgentConn(conn)
@@ -53,16 +53,16 @@ func handleAgentConn(conn net.Conn) {
 
 	var req execRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		log.Printf("[umut-agent] Decode error: %v", err)
+		log.Printf("[umu-agent] Decode error: %v", err)
 		return
 	}
 
 	if req.Command == "" {
-		log.Printf("[umut-agent] Empty command received")
+		log.Printf("[umu-agent] Empty command received")
 		return
 	}
 
-	log.Printf("[umut-agent] Executing: %s", req.Command)
+	log.Printf("[umu-agent] Executing: %s", req.Command)
 
 	timeout := 60 * time.Second
 	if req.TimeoutSec > 0 {
@@ -83,19 +83,19 @@ func handleAgentConn(conn net.Conn) {
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("[umut-agent] Stdout pipe error: %v", err)
+		log.Printf("[umu-agent] Stdout pipe error: %v", err)
 		return
 	}
 
 	var stderrPipe io.ReadCloser
 	stderrPipe, err = cmd.StderrPipe()
 	if err != nil {
-		log.Printf("[umut-agent] Stderr pipe error: %v", err)
+		log.Printf("[umu-agent] Stderr pipe error: %v", err)
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("[umut-agent] Start error: %v", err)
+		log.Printf("[umu-agent] Start error: %v", err)
 		enc := json.NewEncoder(conn)
 		enc.Encode(execLine{Type: "exit", Code: 1, Data: err.Error()})
 		return
@@ -138,7 +138,7 @@ func handleAgentConn(conn net.Conn) {
 		case <-doneCh:
 			readersDone++
 		case encErr := <-errCh:
-			log.Printf("[umut-agent] Encode error: %v", encErr)
+			log.Printf("[umu-agent] Encode error: %v", encErr)
 			cancel()
 			goto waitCmd
 		}

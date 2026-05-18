@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/compute"
-	"github.com/umuttalha/umut/internal/config"
-	"github.com/umuttalha/umut/internal/network"
-	proj "github.com/umuttalha/umut/internal/project"
-	"github.com/umuttalha/umut/internal/routing"
-	"github.com/umuttalha/umut/internal/state"
-	"github.com/umuttalha/umut/internal/storage"
+	"github.com/umuttalha/umu/internal/compute"
+	"github.com/umuttalha/umu/internal/config"
+	"github.com/umuttalha/umu/internal/network"
+	proj "github.com/umuttalha/umu/internal/project"
+	"github.com/umuttalha/umu/internal/routing"
+	"github.com/umuttalha/umu/internal/state"
+	"github.com/umuttalha/umu/internal/storage"
 )
 
 var destroyForce bool
@@ -26,9 +26,9 @@ var destroyCmd = &cobra.Command{
 deletes the Caddy route, and optionally removes the disk image.
 
 Example:
-  umut destroy myproject
-  umut destroy myproject --keep-disk
-  umut destroy myproject --force`,
+  umu destroy myproject
+  umu destroy myproject --keep-disk
+  umu destroy myproject --force`,
 	Args: cobra.ExactArgs(1),
 	RunE: runDestroy,
 }

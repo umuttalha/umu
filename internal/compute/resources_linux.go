@@ -86,7 +86,7 @@ func GetDiskUsage(diskPath string) (int64, error) {
 }
 
 func GetProjectDiskUsage(projectName, serviceName string) string {
-	diskPath := filepath.Join("/var/lib/umut/images", fmt.Sprintf("%s-%s.ext4", projectName, serviceName))
+	diskPath := filepath.Join("/var/lib/umu/images", fmt.Sprintf("%s-%s.ext4", projectName, serviceName))
 	info, err := os.Stat(diskPath)
 	if err != nil {
 		return "0 MB"

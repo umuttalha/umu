@@ -9,9 +9,9 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/compute"
-	proj "github.com/umuttalha/umut/internal/project"
-	"github.com/umuttalha/umut/internal/state"
+	"github.com/umuttalha/umu/internal/compute"
+	proj "github.com/umuttalha/umu/internal/project"
+	"github.com/umuttalha/umu/internal/state"
 )
 
 var logsSys bool
@@ -23,9 +23,9 @@ var logsCmd = &cobra.Command{
 	Long: `Logs tails the logs from the project's Firecracker microVM.
 
 Example:
-  umut logs blog.umut.space
-  umut logs blog.umut.space:api
-  umut logs blog.umut.space -n 50`,
+  umu logs blog.umu.space
+  umu logs blog.umu.space:api
+  umu logs blog.umu.space -n 50`,
 	Args: cobra.ExactArgs(1),
 	RunE: runLogs,
 }

@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # Build a minimal Ubuntu 24.04 rootfs for Firecracker microVMs
-# Output: /var/lib/umut/images/ubuntu-base.ext4
+# Output: /var/lib/umu/images/ubuntu-base.ext4
 
-DATA_DIR="${UMUT_DATA_DIR:-/var/lib/umut}"
+DATA_DIR="${UMU_DATA_DIR:-/var/lib/umu}"
 IMAGES_DIR="$DATA_DIR/images"
 OUTPUT="$IMAGES_DIR/ubuntu-base.ext4"
 
-# Core packages (no dropbear-bin — injected separately by umut deploy)
+# Core packages (no dropbear-bin — injected separately by umu deploy)
 # python3-pip is in universe; VM can apt install it later if needed
 PACKAGES="busybox-static ca-certificates curl wget bash coreutils \
   iproute2 iputils-ping libc6 \
@@ -90,7 +90,7 @@ chmod 700 "$ROOTFS/etc/dropbear"
 mkdir -p "$ROOTFS/root/.ssh"
 chmod 700 "$ROOTFS/root/.ssh"
 
-# Placeholder init (overwritten by umut-init at deploy time)
+# Placeholder init (overwritten by umu-init at deploy time)
 if [ ! -f "$ROOTFS/sbin/init" ]; then
   touch "$ROOTFS/sbin/init"
 fi

@@ -1,4 +1,4 @@
-module github.com/umuttalha/umut
+module github.com/umuttalha/umu
 
 go 1.25.0
 

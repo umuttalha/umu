@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"github.com/umuttalha/umut/internal/config"
-	"github.com/umuttalha/umut/internal/dns"
+	"github.com/umuttalha/umu/internal/config"
+	"github.com/umuttalha/umu/internal/dns"
 )
 
 func newDNSClient(cfg *config.Config) *dns.Client {

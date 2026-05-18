@@ -5,13 +5,13 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/umuttalha/umut/internal/compute"
+	"github.com/umuttalha/umu/internal/compute"
 )
 
 const (
 	SubnetBase     = compute.CNISubnetBase
 	IPv4SubnetBase = "172.26"
-	SharedBridge   = "br-umut"
+	SharedBridge   = "br-umu"
 )
 
 var HostInterface = "eth0"
@@ -96,7 +96,7 @@ func SetupNDPProxy(globalIP string) error {
 		return err
 	}
 	// Add a /128 route for this VM's global IP via the bridge so the host knows
-	// the address is hosted locally (via br-umut) rather than on the WAN interface.
+	// the address is hosted locally (via br-umu) rather than on the WAN interface.
 	return run("ip", "-6", "route", "add", globalIP, "dev", SharedBridge)
 }
 
@@ -157,12 +157,12 @@ func DestroySharedBridge() error {
 	run("ip6tables", "-F", "FORWARD")
 	run("iptables", "-F", "FORWARD")
 	run("iptables", "-t", "nat", "-F", "POSTROUTING")
-	// Remove br-umut IPv6 INPUT rules
+	// Remove br-umu IPv6 INPUT rules
 	run("ip6tables", "-D", "INPUT", "-i", SharedBridge, "-p", "icmpv6", "-j", "ACCEPT")
 	run("ip6tables", "-D", "INPUT", "-i", SharedBridge, "-p", "tcp", "-d", compute.CNIGateway, "--dport", "9071", "-j", "ACCEPT")
 	run("ip6tables", "-D", "INPUT", "-i", SharedBridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
 	run("ip6tables", "-D", "INPUT", "-i", SharedBridge, "-j", "DROP")
-	// Remove br-umut IPv4 INPUT rules
+	// Remove br-umu IPv4 INPUT rules
 	run("iptables", "-D", "INPUT", "-i", SharedBridge, "-p", "icmp", "-j", "ACCEPT")
 	run("iptables", "-D", "INPUT", "-i", SharedBridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
 	run("iptables", "-D", "INPUT", "-i", SharedBridge, "-j", "DROP")

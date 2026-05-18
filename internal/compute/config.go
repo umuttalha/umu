@@ -58,37 +58,37 @@ type VMConfig struct {
 
 // BuildKernelArgs constructs the kernel command-line arguments from a VMConfig.
 // Secrets are no longer included (F-04) — they are injected into the disk image as
-// .umut/secrets.env (0600, root-only). The kernel cmdline only carries non-sensitive
+// .umu/secrets.env (0600, root-only). The kernel cmdline only carries non-sensitive
 // static configuration.
 func BuildKernelArgs(cfg VMConfig) (string, error) {
 	rootFlag := "root=/dev/vda rw"
 	if cfg.RootReadOnly {
 		rootFlag = "root=/dev/vda ro"
 	}
-	kernelArgs := "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.force_probe=1 " + rootFlag + " umut.ip=" + cfg.GuestIP + " umut.gw=" + CNIGateway
+	kernelArgs := "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.force_probe=1 " + rootFlag + " umu.ip=" + cfg.GuestIP + " umu.gw=" + CNIGateway
 	if cfg.GuestIPv4 != "" {
-		kernelArgs += " umut.ipv4=" + cfg.GuestIPv4 + " umut.gw4=" + IPv4Gateway
+		kernelArgs += " umu.ipv4=" + cfg.GuestIPv4 + " umu.gw4=" + IPv4Gateway
 	}
 	if cfg.GuestGlobalIP != "" {
-		kernelArgs += " umut.global_ip=" + cfg.GuestGlobalIP
+		kernelArgs += " umu.global_ip=" + cfg.GuestGlobalIP
 	}
 	if cfg.HostsMapping != "" {
 		if err := validateKernelArgValue(cfg.HostsMapping); err != nil {
 			return "", fmt.Errorf("hosts mapping: %w", err)
 		}
-		kernelArgs += " umut.hosts=" + cfg.HostsMapping
+		kernelArgs += " umu.hosts=" + cfg.HostsMapping
 	}
 	if cfg.VolumesMapping != "" {
 		if err := validateKernelArgValue(cfg.VolumesMapping); err != nil {
 			return "", fmt.Errorf("volumes mapping: %w", err)
 		}
-		kernelArgs += " umut.vols=" + cfg.VolumesMapping
+		kernelArgs += " umu.vols=" + cfg.VolumesMapping
 	}
 	if cfg.Mode != "" {
-		if err := validateKernelArgName("umut.mode"); err != nil {
+		if err := validateKernelArgName("umu.mode"); err != nil {
 			return "", fmt.Errorf("mode arg: %w", err)
 		}
-		kernelArgs += " umut.mode=" + cfg.Mode
+		kernelArgs += " umu.mode=" + cfg.Mode
 	}
 	if len(kernelArgs) > maxKernelArgsLen {
 		return "", fmt.Errorf("kernel args exceed %d byte limit (%d bytes): reduce the number of hosts entries or volume mounts", maxKernelArgsLen, len(kernelArgs))
@@ -118,15 +118,15 @@ var (
 )
 
 func init() {
-	dataDir := os.Getenv("UMUT_DATA_DIR")
+	dataDir := os.Getenv("UMU_DATA_DIR")
 	if dataDir == "" {
-		dataDir = "/var/lib/umut"
+		dataDir = "/var/lib/umu"
 	}
 	DefaultKernelPath = filepath.Join(dataDir, "vmlinux")
 	SocketDir = filepath.Join(dataDir, "sockets")
 	SharedRootImage = filepath.Join(dataDir, "images", "python-base.ext4")
 
-	CNIGlobalPrefix6 = os.Getenv("UMUT_GLOBAL_PREFIX6")
+	CNIGlobalPrefix6 = os.Getenv("UMU_GLOBAL_PREFIX6")
 }
 
 const (
@@ -139,7 +139,7 @@ const (
 	DefaultQuickwitMemory = 1024
 
 	// CNI networking — IPv6 ULA (Unique Local Address)
-	CNINetworkName    = "umut"
+	CNINetworkName    = "umu"
 	CNIGateway        = "fd00:172:26::1"
 	CNISubnetBase     = "fd00:172:26"
 	IPv4Gateway       = "172.26.0.1"

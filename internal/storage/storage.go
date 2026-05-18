@@ -17,9 +17,9 @@ func init() {
 }
 
 func initImagesDir() {
-	dataDir := os.Getenv("UMUT_DATA_DIR")
+	dataDir := os.Getenv("UMU_DATA_DIR")
 	if dataDir == "" {
-		dataDir = "/var/lib/umut"
+		dataDir = "/var/lib/umu"
 	}
 	ImagesDir = filepath.Join(dataDir, "images")
 	ChecksumDir = filepath.Join(dataDir, "checksums")
@@ -91,9 +91,9 @@ func DiskExists(projectName string) bool {
 	return err == nil
 }
 
-// InjectInit securely mounts the freshly cloned base disk and injects umut-init as PID 1.
+// InjectInit securely mounts the freshly cloned base disk and injects umu-init as PID 1.
 func InjectInit(diskPath string) error {
-	mountDir, err := os.MkdirTemp("", "umut-mount-")
+	mountDir, err := os.MkdirTemp("", "umu-mount-")
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func InjectInit(diskPath string) error {
 		exec.Command("umount", mountDir).Run()
 	}()
 
-	// Copy umut-init
+	// Copy umu-init
 	initDest := filepath.Join(mountDir, "sbin", "init")
 
 	// Create sbin if missing
@@ -118,14 +118,14 @@ func InjectInit(diskPath string) error {
 	// Remove old init to prevent "Text file busy" if inode is locked
 	os.Remove(initDest)
 
-	cmdCp := exec.Command("cp", "/usr/local/bin/umut-init", initDest)
+	cmdCp := exec.Command("cp", "/usr/local/bin/umu-init", initDest)
 	if output, err := cmdCp.CombinedOutput(); err != nil {
-		return fmt.Errorf("copy umut-init: %s: %w", string(output), err)
+		return fmt.Errorf("copy umu-init: %s: %w", string(output), err)
 	}
 
 	cmdChmod := exec.Command("chmod", "+x", initDest)
 	if err := cmdChmod.Run(); err != nil {
-		return fmt.Errorf("chmod umut-init: %w", err)
+		return fmt.Errorf("chmod umu-init: %w", err)
 	}
 
 	return nil
@@ -133,7 +133,7 @@ func InjectInit(diskPath string) error {
 
 // InjectHostname writes the given hostname into /etc/hostname on the disk image.
 func InjectHostname(diskPath, hostname string) error {
-	mountDir, err := os.MkdirTemp("", "umut-hostname-")
+	mountDir, err := os.MkdirTemp("", "umu-hostname-")
 	if err != nil {
 		return err
 	}
@@ -232,14 +232,14 @@ func safeRemoveFile(diskName string) error {
 }
 
 // InjectSecrets mounts an ext4 disk image, writes environment variables as JSON to
-// .umut/secrets.env (0600), and unmounts. Secrets are no longer passed via the
+// .umu/secrets.env (0600), and unmounts. Secrets are no longer passed via the
 // kernel command line (world-readable via /proc/cmdline) — see F-04.
 func InjectSecrets(diskPath string, env map[string]string) error {
 	if len(env) == 0 {
 		return nil
 	}
 
-	mountDir, err := os.MkdirTemp("", "umut-secrets-")
+	mountDir, err := os.MkdirTemp("", "umu-secrets-")
 	if err != nil {
 		return err
 	}
@@ -253,9 +253,9 @@ func InjectSecrets(diskPath string, env map[string]string) error {
 		exec.Command("umount", mountDir).Run()
 	}()
 
-	umutDir := filepath.Join(mountDir, ".umut")
-	if err := os.MkdirAll(umutDir, 0700); err != nil {
-		return fmt.Errorf("create .umut dir: %w", err)
+	umuDir := filepath.Join(mountDir, ".umu")
+	if err := os.MkdirAll(umuDir, 0700); err != nil {
+		return fmt.Errorf("create .umu dir: %w", err)
 	}
 
 	data, err := json.MarshalIndent(env, "", "  ")
@@ -263,7 +263,7 @@ func InjectSecrets(diskPath string, env map[string]string) error {
 		return fmt.Errorf("marshal env: %w", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(umutDir, "secrets.env"), data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(umuDir, "secrets.env"), data, 0600); err != nil {
 		return fmt.Errorf("write secrets.env: %w", err)
 	}
 

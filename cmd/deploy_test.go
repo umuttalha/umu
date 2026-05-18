@@ -23,8 +23,8 @@ func TestRootCmdExists(t *testing.T) {
 	if rootCmd == nil {
 		t.Error("rootCmd should not be nil")
 	}
-	if rootCmd.Use != "umut" {
-		t.Errorf("rootCmd.Use = %q, want 'umut'", rootCmd.Use)
+	if rootCmd.Use != "umu" {
+		t.Errorf("rootCmd.Use = %q, want 'umu'", rootCmd.Use)
 	}
 }
 

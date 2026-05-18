@@ -6,7 +6,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/state"
+	"github.com/umuttalha/umu/internal/state"
 )
 
 var listCmd = &cobra.Command{
@@ -15,7 +15,7 @@ var listCmd = &cobra.Command{
 	Long: `List shows all projects with their status, IP address, and URL.
 
 Example:
-  umut list`,
+  umu list`,
 	Aliases: []string{"ls"},
 	Args:    cobra.NoArgs,
 	RunE:    runList,

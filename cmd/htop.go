@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/metrics"
-	"github.com/umuttalha/umut/internal/state"
+	"github.com/umuttalha/umu/internal/metrics"
+	"github.com/umuttalha/umu/internal/state"
 )
 
 var (
@@ -30,9 +30,9 @@ Use --watch for a live refreshing display.
 Use --json for machine-readable output.
 
 Examples:
-  umut htop            # Single snapshot
-  umut htop --json     # JSON output
-  umut htop --watch    # Live refreshing display`,
+  umu htop            # Single snapshot
+  umu htop --json     # JSON output
+  umu htop --watch    # Live refreshing display`,
 	Args: cobra.NoArgs,
 	RunE: runTop,
 }
@@ -109,7 +109,7 @@ func runTopWatch(store *state.Store, collector *metrics.Collector) error {
 
 		fmt.Print("\033[2J\033[H")
 
-		fmt.Printf("  umut htop \033[1m%s\033[0m  %d VM(s) running\n",
+		fmt.Printf("  umu htop \033[1m%s\033[0m  %d VM(s) running\n",
 			time.Now().Format("15:04:05"), countAlive(results))
 		fmt.Println()
 

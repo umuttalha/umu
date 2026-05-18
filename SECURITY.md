@@ -1,6 +1,6 @@
 # Security
 
-Security model, audit findings, and hardening plan for **umut** — a personal serverless PaaS that runs user workloads inside [Firecracker](https://firecracker-microvm.github.io/) microVMs on bare-metal Ubuntu 24.04.
+Security model, audit findings, and hardening plan for **umu** — a personal serverless PaaS that runs user workloads inside [Firecracker](https://firecracker-microvm.github.io/) microVMs on bare-metal Ubuntu 24.04.
 
 ## Threat Model
 
@@ -9,18 +9,18 @@ Security model, audit findings, and hardening plan for **umut** — a personal s
 | **Compromised guest workload** | Arbitrary code execution inside a microVM | Escapes VM → gains access to host, other projects, or persistent data |
 | **Noisy neighbor** | Resource exhaustion by one VM | Starves other VMs of CPU, memory, or disk I/O |
 | **Network attacker** | IP spoofing / ARP poisoning from within a VPC subnet | Intercepts or disrupts traffic between services in the same project |
-| **Insider (host operator)** | Direct access to `/var/lib/umut/` | Reads secrets, state, SSH keys, disk images |
+| **Insider (host operator)** | Direct access to `/var/lib/umu/` | Reads secrets, state, SSH keys, disk images |
 | **Supply chain** | Compromised base rootfs image | Boots all VMs with backdoored OS |
 
 ## Assets
 
 | Asset | Location | Contains |
 |---|---|---|---|
-| **SSH host keys** | `/var/lib/umut/keys/<proj>-<svc>/` (0600) | Per-project SSH identity |
-| **Project state** | `/var/lib/umut/state.db` (0644) | Project topology, IPs, ports, Caddy routes |
-| **VM disk images** | `/var/lib/umut/images/*.ext4` (0644) | Guest rootfs and persistent volumes |
-| **Firecracker sockets** | `/var/lib/umut/sockets/*.sock` | VM lifecycle control API |
-| **VM console logs** | `/var/lib/umut/logs/*.log` (0644) | Guest stdout/stderr (may leak sensitive data) |
+| **SSH host keys** | `/var/lib/umu/keys/<proj>-<svc>/` (0600) | Per-project SSH identity |
+| **Project state** | `/var/lib/umu/state.db` (0644) | Project topology, IPs, ports, Caddy routes |
+| **VM disk images** | `/var/lib/umu/images/*.ext4` (0644) | Guest rootfs and persistent volumes |
+| **Firecracker sockets** | `/var/lib/umu/sockets/*.sock` | VM lifecycle control API |
+| **VM console logs** | `/var/lib/umu/logs/*.log` (0644) | Guest stdout/stderr (may leak sensitive data) |
 
 ## Current Security Measures
 
@@ -59,7 +59,7 @@ Security model, audit findings, and hardening plan for **umut** — a personal s
 Firecracker is now spawned via the **Jailer** using `JailerConfig` on the `firecracker.Config`. The jailer provides:
 - **chroot isolation** — Firecracker runs inside `/srv/jailer/firecracker/<id>/root/`
 - **seccomp BPF** — jailer applies built-in whitelist syscall filter
-- **Capability drop** — runs as unprivileged `umut` user (UID 1000), drops all caps
+- **Capability drop** — runs as unprivileged `umu` user (UID 1000), drops all caps
 - **Hard-links via `NaiveChrootStrategy`** — kernel + drive images are hard-linked (not copied) into the chroot
 
 See `internal/compute/vm.go`, `internal/compute/config.go`, and `install.sh` for the implementation.
@@ -73,10 +73,10 @@ See `internal/compute/vm.go`, `internal/compute/config.go`, and `install.sh` for
 
 The Firecracker HTTP API socket is created under the jailer chroot at `/srv/jailer/firecracker/<id>/root/<id>.sock`. Previously, local processes could traverse `/srv/jailer` (0755) and connect to the socket. Fix:
 
-- `/srv/jailer` now uses **0750** with `root:umut` ownership — only root and processes in the `umut` group can traverse the jailer directory tree.
+- `/srv/jailer` now uses **0750** with `root:umu` ownership — only root and processes in the `umu` group can traverse the jailer directory tree.
 - After `machine.Start()`, the jailer root directory (`/srv/jailer/firecracker/<id>/root/`) is explicitly set to **0700**, preventing non-owner traversal.
 - The Firecracker API socket file is explicitly set to **0600**, preventing any other user from connecting to the socket.
-- `install.sh` applies `chown root:umut` + `chmod 0750` on `/srv/jailer` even if the directory already exists (idempotent upgrade).
+- `install.sh` applies `chown root:umu` + `chmod 0750` on `/srv/jailer` even if the directory already exists (idempotent upgrade).
 
 ---
 
@@ -85,7 +85,7 @@ The Firecracker HTTP API socket is created under the jailer chroot at `/srv/jail
 **Severity:** High  
 **Files:** `internal/network/network.go:185-206` (was), now `internal/network/network.go:185-243`
 
-Each project bridge now gets explicit DROP rules for all other umut bridges, inserted at the top of the iptables FORWARD chain. The `isolateBridge()` function in `CreateBridge` lists all existing `br-*` interfaces and inserts bidirectional DROP rules. `removeBridgeIsolation()` in `DestroyBridge` cleans up these rules on teardown.
+Each project bridge now gets explicit DROP rules for all other umu bridges, inserted at the top of the iptables FORWARD chain. The `isolateBridge()` function in `CreateBridge` lists all existing `br-*` interfaces and inserts bidirectional DROP rules. `removeBridgeIsolation()` in `DestroyBridge` cleans up these rules on teardown.
 
 This ensures that traffic between projects (e.g. `br-projA` → `br-projB`) is dropped at the iptables level, even if the host kernel routing table would otherwise forward it. The existing per-bridge ACCEPT rules (intra-VPC, internet outbound, host-originated) continue to work correctly.
 
@@ -94,18 +94,18 @@ This ensures that traffic between projects (e.g. `br-projA` → `br-projB`) is d
 **Severity:** High  
 **Files:** `internal/compute/config.go:32-46` (was), `cmd/deploy.go:217-232` (was)
 
-Environment variables (including secrets from `umut secrets set`) were base64-encoded and passed as a kernel boot parameter `umut.env=<base64-encoded JSON>`.
+Environment variables (including secrets from `umu secrets set`) were base64-encoded and passed as a kernel boot parameter `umu.env=<base64-encoded JSON>`.
 
 The kernel command line is world-readable inside the VM via `/proc/cmdline`. **Any process** inside the guest can trivially extract all secrets:
 ```bash
-cat /proc/cmdline | grep -o 'umut.env=[^ ]*' | cut -d= -f2- | base64 -d
+cat /proc/cmdline | grep -o 'umu.env=[^ ]*' | cut -d= -f2- | base64 -d
 ```
 
 **Fix implemented (2026-05-06):**
-- New `InjectSecrets()` in `internal/storage/storage.go` writes merged environment variables as JSON to `.umut/secrets.env` (0600, root-only) on the disk image before VM boot.
+- New `InjectSecrets()` in `internal/storage/storage.go` writes merged environment variables as JSON to `.umu/secrets.env` (0600, root-only) on the disk image before VM boot.
 - `cmd/deploy.go` now calls `MergeEnv()` + `storage.InjectSecrets()` instead of setting `vmCfg.EnvMapping`.
-- `BuildKernelArgs()` no longer includes `umut.env=` — kernel command line carries only non-sensitive static config (IP, gateway, hosts, volumes).
-- `umut-init` reads secrets from on-disk file first (`/workspace/.umut/secrets.env` on user data disks, `/.umut/secrets.env` on rootfs disks), with fallback to kernel cmdline for backward compatibility with old deployments.
+- `BuildKernelArgs()` no longer includes `umu.env=` — kernel command line carries only non-sensitive static config (IP, gateway, hosts, volumes).
+- `umu-init` reads secrets from on-disk file first (`/workspace/.umu/secrets.env` on user data disks, `/.umu/secrets.env` on rootfs disks), with fallback to kernel cmdline for backward compatibility with old deployments.
 
 ---
 
@@ -115,7 +115,7 @@ cat /proc/cmdline | grep -o 'umut.env=[^ ]*' | cut -d= -f2- | base64 -d
 **Files:** `install.sh:154-157` (was), now `install.sh:181-186`, `internal/storage/storage.go:157-203`
 
 The base rootfs previously had:
-- **Hardcoded root password**: `root:umut`
+- **Hardcoded root password**: `root:umu`
 - **PermitRootLogin yes** — allowed root over SSH
 - **PasswordAuthentication yes** — allowed password login
 - **No SSH key rotation policy**
@@ -136,9 +136,9 @@ Fix:
 
 Only CPU and memory were previously constrained. Fix:
 
-- **I/O bandwidth limits**: `io.max` applies per-VM read/write bandwidth caps via `setIOMax()`. Uses the major:minor of the block device backing `/var/lib/umut/images` to set `rbps=<N>` and `wbps=<N>` with unlimited IOPS (`riops=max wiops=max`). Default cap is 100 MB/s (`DefaultIOBandwidthBps = 100 * 1024 * 1024`), configurable via `--io-bandwidth` CLI flag or `VMConfig.IOBandwidthBps`.
+- **I/O bandwidth limits**: `io.max` applies per-VM read/write bandwidth caps via `setIOMax()`. Uses the major:minor of the block device backing `/var/lib/umu/images` to set `rbps=<N>` and `wbps=<N>` with unlimited IOPS (`riops=max wiops=max`). Default cap is 100 MB/s (`DefaultIOBandwidthBps = 100 * 1024 * 1024`), configurable via `--io-bandwidth` CLI flag or `VMConfig.IOBandwidthBps`.
 - **PID limits**: `pids.max` with default 4096 (`DefaultPidsMax`), configurable via `--pids-max` CLI flag or `VMConfig.PidsMax`. A fork bomb inside a VM is now contained within the cgroup and cannot exhaust the host PID space.
-- **Configurability**: Both values are set in `VMConfig` and passed to `SetupCgroup()` from `StartVM()`. CLI flags `--io-bandwidth` and `--pids-max` on `umut deploy` allow per-project overrides for production tuning.
+- **Configurability**: Both values are set in `VMConfig` and passed to `SetupCgroup()` from `StartVM()`. CLI flags `--io-bandwidth` and `--pids-max` on `umu deploy` allow per-project overrides for production tuning.
 
 ---
 
@@ -162,7 +162,7 @@ Fix:
 **Severity:** Medium  
 **Files:** `internal/compute/config.go:32-46` (was)
 
-The kernel command line has a hard limit of **2048 bytes**. If env vars, hosts entries, and volume mappings exceed this, the VM fails to boot. However, no filtering prevented malicious env var names (containing `=`, `\n`, shell metacharacters) from corrupting the kernel arg parsing inside `umut-init`.
+The kernel command line has a hard limit of **2048 bytes**. If env vars, hosts entries, and volume mappings exceed this, the VM fails to boot. However, no filtering prevented malicious env var names (containing `=`, `\n`, shell metacharacters) from corrupting the kernel arg parsing inside `umu-init`.
 
 **Fix implemented (2026-05-06):**
 - Secrets are no longer passed via kernel command line (see F-04), eliminating the primary attack surface.
@@ -197,9 +197,9 @@ All VMs previously used **CID=3** for vsock (the default Firecracker host CID). 
 ### F-10: No metadata service for guest→host communication ✅ RESOLVED
 
 **Severity:** Informational  
-**Files:** `internal/metadata/server.go`, `internal/compute/config.go`, `internal/compute/vm.go`, `cmd/umut-init/main.go`, `cmd/deploy.go`, `cmd/unfreeze.go`
+**Files:** `internal/metadata/server.go`, `internal/compute/config.go`, `internal/compute/vm.go`, `cmd/umu-init/main.go`, `cmd/deploy.go`, `cmd/unfreeze.go`
 
-The VM uses kernel command line (`umut.*` params parsed in `/proc/cmdline`) as the sole mechanism to receive configuration from the host. This is:
+The VM uses kernel command line (`umu.*` params parsed in `/proc/cmdline`) as the sole mechanism to receive configuration from the host. This is:
 - Limited to 2048 bytes total
 - World-readable by all processes
 - Static after boot (no runtime config changes possible)
@@ -207,7 +207,7 @@ The VM uses kernel command line (`umut.*` params parsed in `/proc/cmdline`) as t
 **Fix implemented (2026-05-06):**
 - New `internal/metadata` package provides a vsock-based metadata service similar to AWS IMDS/EC2 metadata service.
 - **Host side**: `NewServerWithPayload()` / `NewServer()` starts a one-shot Unix-domain socket listener on `<vm>.vsock_9998` before `machine.Start()`. When the guest connects, the server sends a JSON metadata payload containing IP, gateway, hosts, volumes, environment variables, and vsock CID.
-- **Guest side**: `umut-init` calls `fetchMetadata()` at boot, connecting to CID=2, port=9998 via vsock. Metadata takes priority over kernel cmdline for all configuration values.
+- **Guest side**: `umu-init` calls `fetchMetadata()` at boot, connecting to CID=2, port=9998 via vsock. Metadata takes priority over kernel cmdline for all configuration values.
 - **Backward compatibility**: Guests fall back to `/proc/cmdline` parsing if the metadata service is not available (old deployments, non-metadata-enabled VMs like builder VMs).
 - `VMConfig.MetadataJSON` field carries the pre-serialized metadata payload; `BuildMetadataJSON()` in `config.go` generates it.
 - All VM launch paths updated: `cmd/deploy.go`, `cmd/unfreeze.go`.
@@ -223,7 +223,7 @@ All SSH connections previously used `-o StrictHostKeyChecking=no -o UserKnownHos
 
 **Fix implemented (2026-05-06):**
 - New `internal/sshutil` package provides proper host key management:
-  - `AddHostKey(hostPort, pubKeyLine)` / `RemoveHostKey(hostPort)` — dedicated `/var/lib/umut/known_hosts` file (0600)
+  - `AddHostKey(hostPort, pubKeyLine)` / `RemoveHostKey(hostPort)` — dedicated `/var/lib/umu/known_hosts` file (0600)
   - `Command()` — SSH with `StrictHostKeyChecking=yes` for internal VM connections
   - `QuickSSH()` — `StrictHostKeyChecking=accept-new` for one-off health checks
   - `ScpCommand()` / `ScpQuick()` — same approach for SCP transfers
@@ -252,7 +252,7 @@ All SSH connections previously used `-o StrictHostKeyChecking=no -o UserKnownHos
 | ID | Action | Impact | Effort | Reference |
 |----|--------|--------|--------|-----------|
 | R-01 | **Switch to `JailerCommandBuilder`** instead of `VMCommandBuilder` | Critical | Medium | `internal/compute/vm.go:126-133` | ✅ Done |
-| R-02 | **Move secrets off kernel cmdline** — write secrets to the user data disk (`/dev/vdb`) as a file (e.g. `/workspace/.umut/secrets.env`) before boot, only readable by root | High | Medium | `internal/compute/config.go:40-42`, `internal/storage/storage.go` | ✅ Done |
+| R-02 | **Move secrets off kernel cmdline** — write secrets to the user data disk (`/dev/vdb`) as a file (e.g. `/workspace/.umu/secrets.env`) before boot, only readable by root | High | Medium | `internal/compute/config.go:40-42`, `internal/storage/storage.go` | ✅ Done |
 | R-03 | **Add explicit DROP between bridges** — insert iptables DROP rules for every distinct bridge pair | High | Low | `internal/network/network.go:185-206` | ✅ Done |
 | R-04 | **Remove password-based SSH** — disable `PasswordAuthentication` in base rootfs, remove hardcoded password, rely on injected host keys only | High | Low | `install.sh:154-157` | ✅ Done |
 
@@ -271,7 +271,7 @@ All SSH connections previously used `-o StrictHostKeyChecking=no -o UserKnownHos
 
 | ID | Action | Impact | Effort |
 |----|--------|--------|--------|
-| R-11 | **Implement vsock metadata service** — guest polls for config, secrets, and health heartbeats instead of kernel cmdline | Medium | High | `internal/metadata/server.go`, `internal/compute/config.go:BuildMetadataJSON()`, `cmd/umut-init/main.go:fetchMetadata()` | ✅ Done |
+| R-11 | **Implement vsock metadata service** — guest polls for config, secrets, and health heartbeats instead of kernel cmdline | Medium | High | `internal/metadata/server.go`, `internal/compute/config.go:BuildMetadataJSON()`, `cmd/umu-init/main.go:fetchMetadata()` | ✅ Done |
 | R-16 | **Signed rootfs verification** — verify SHA256 checksum of the downloaded base rootfs before first use | Low | Low | `internal/storage/verify.go`, `install.sh` | ✅ Done |
 
 ## Firecracker Jailer Migration Guide
@@ -291,8 +291,8 @@ fcCfg := firecracker.Config{
         Enabled: true, // jailer applies built-in seccomp filter
     },
     JailerCfg: &firecracker.JailerConfig{
-        UID:            &uid,            // 1000 (umut user)
-        GID:            &gid,            // 1000 (umut group)
+        UID:            &uid,            // 1000 (umu user)
+        GID:            &gid,            // 1000 (umu group)
         ID:             cfg.ProjectName,
         NumaNode:       &numaNode,       // 0
         ChrootBaseDir:  JailerBaseDir,   // /srv/jailer
@@ -315,29 +315,29 @@ machineOpts := []firecracker.Opt{
 
 1. **Filesystem jail**: Firecracker only sees `/srv/jailer/firecracker/<id>/root/` — the host root filesystem is inaccessible
 2. **Seccomp filtering**: Built-in seccomp BPF whitelists only the syscalls Firecracker needs
-3. **Capability dropping**: Runs as unprivileged `umut` user (UID/GID 1000), drops all non-essential capabilities
+3. **Capability dropping**: Runs as unprivileged `umu` user (UID/GID 1000), drops all non-essential capabilities
 4. **Hard-linked files**: `NaiveChrootStrategy` uses `os.Link()` to hard-link kernel + drives into chroot (zero copy overhead, must be same filesystem)
 
 ### Infrastructure changes (`install.sh`)
 
 - Installs `jailer` binary alongside `firecracker` (from same release archive)
-- Creates `umut` system user (UID=1000) and group (GID=1000)
-- Adds `umut` user to `kvm` group for `/dev/kvm` access
+- Creates `umu` system user (UID=1000) and group (GID=1000)
+- Adds `umu` user to `kvm` group for `/dev/kvm` access
 - Creates `/srv/jailer` directory (root:root, 0755)
-- Sets `/var/lib/umut/images/*` readable by `umut` group
-- Sets `/var/lib/umut/sockets` writable by `umut` group
+- Sets `/var/lib/umu/images/*` readable by `umu` group
+- Sets `/var/lib/umu/sockets` writable by `umu` group
 
 ### Path architecture
 
 | Before (no jailer) | After (with jailer) |
 |---|---|
-| Socket: `/var/lib/umut/sockets/<proj>.sock` | Socket: `/srv/jailer/firecracker/<proj>/root/<proj>.sock` |
-| VSock: `/var/lib/umut/sockets/<proj>.vsock` | VSock: `/srv/jailer/firecracker/<proj>/root/<proj>.vsock` |
-| Logs: `/var/lib/umut/logs/<proj>.log` | Logs: `/var/lib/umut/logs/<proj>.log` (unchanged) |
+| Socket: `/var/lib/umu/sockets/<proj>.sock` | Socket: `/srv/jailer/firecracker/<proj>/root/<proj>.sock` |
+| VSock: `/var/lib/umu/sockets/<proj>.vsock` | VSock: `/srv/jailer/firecracker/<proj>/root/<proj>.vsock` |
+| Logs: `/var/lib/umu/logs/<proj>.log` | Logs: `/var/lib/umu/logs/<proj>.log` (unchanged) |
 
 ### cgroups v2
 
-The jailer creates its own cgroup for the firecracker process. After `machine.Start()`, `SetupCgroup()` moves the process from the jailer's cgroup into our `/sys/fs/cgroup/umut/<proj>` cgroup with CPU/memory limits applied (same as before).
+The jailer creates its own cgroup for the firecracker process. After `machine.Start()`, `SetupCgroup()` moves the process from the jailer's cgroup into our `/sys/fs/cgroup/umu/<proj>` cgroup with CPU/memory limits applied (same as before).
 
 ## Network Isolation Enhancements
 
@@ -360,7 +360,7 @@ Packet enters br-projA, destined for br-projB subnet
 
 ### Why not change default policy to DROP?
 
-Setting `iptables -P FORWARD DROP` would also block non-umut traffic (e.g., Docker container networking, if installed). The explicit per-pair DROP rules only affect umut bridges, leaving other forwarded traffic untouched.
+Setting `iptables -P FORWARD DROP` would also block non-umu traffic (e.g., Docker container networking, if installed). The explicit per-pair DROP rules only affect umu bridges, leaving other forwarded traffic untouched.
 
 ## Secrets Handling Fix
 
@@ -369,22 +369,22 @@ Replace kernel cmdline env passthrough with a **secrets file on the user data di
 ```go
 // In internal/storage/storage.go: InjectSecretsFile()
 func InjectSecretsFile(dataDiskPath string, envJSON []byte) error {
-    mountDir, _ := os.MkdirTemp("", "umut-secrets-")
+    mountDir, _ := os.MkdirTemp("", "umu-secrets-")
     defer os.RemoveAll(mountDir)
 
     run("mount", "-o", "loop", dataDiskPath, mountDir)
 
-    // Write secrets to a root-only file in /workspace/.umut/
-    umutDir := filepath.Join(mountDir, ".umut")
-    os.MkdirAll(umutDir, 0700)
-    os.WriteFile(filepath.Join(umutDir, "secrets.env"), envJSON, 0600)
+    // Write secrets to a root-only file in /workspace/.umu/
+    umuDir := filepath.Join(mountDir, ".umu")
+    os.MkdirAll(umuDir, 0700)
+    os.WriteFile(filepath.Join(umuDir, "secrets.env"), envJSON, 0600)
 
     run("umount", mountDir)
     return nil
 }
 ```
 
-Then in `umut-init`, source `/workspace/.umut/secrets.env` instead of parsing `/proc/cmdline` for `umut.env=`. The `umut.` kernel args remain for IP, gateway, hosts, and volumes — which are static and non-sensitive.
+Then in `umu-init`, source `/workspace/.umu/secrets.env` instead of parsing `/proc/cmdline` for `umu.env=`. The `umu.` kernel args remain for IP, gateway, hosts, and volumes — which are static and non-sensitive.
 
 ## Reporting a Vulnerability
 
@@ -394,13 +394,13 @@ For security issues, please open an issue at the project's repository. If the is
 
 ## Signed Rootfs Verification (R-16)
 
-Base images (`base.ext4`, `builder-base.ext4`, etc.) are now verified against SHA256 checksums before use. `install.sh` generates checksum files in `/var/lib/umut/checksums/`. `storage.VerifyRootfsChecksum()` is called before any disk clone or shared rootfs use. A checksum mismatch or missing checksum file results in a hard error — no VMs boot with unverified images.
+Base images (`base.ext4`, `builder-base.ext4`, etc.) are now verified against SHA256 checksums before use. `install.sh` generates checksum files in `/var/lib/umu/checksums/`. `storage.VerifyRootfsChecksum()` is called before any disk clone or shared rootfs use. A checksum mismatch or missing checksum file results in a hard error — no VMs boot with unverified images.
 
 ### Implementation
 
 ```go
 // In install.sh (generated automatically after downloading images):
-// sha256sum image.ext4 > /var/lib/umut/checksums/image.ext4.sha256
+// sha256sum image.ext4 > /var/lib/umu/checksums/image.ext4.sha256
 
 // In internal/storage/verify.go:
 func VerifyRootfsChecksum(diskPath string) error { ... }
@@ -413,7 +413,7 @@ func GenerateChecksum(diskPath string) error { ... }
 
 ## Network Namespace Isolation (R-08)
 
-Each project's Linux bridge is now placed in its own dedicated network namespace (`umut-<project>`). A veth pair connects the namespace to the host for routing and NAT. This provides **kernel-level isolation** — processes in one namespace cannot see or reach interfaces in another namespace, eliminating the need to rely solely on iptables DROP rules for inter-bridge isolation.
+Each project's Linux bridge is now placed in its own dedicated network namespace (`umu-<project>`). A veth pair connects the namespace to the host for routing and NAT. This provides **kernel-level isolation** — processes in one namespace cannot see or reach interfaces in another namespace, eliminating the need to rely solely on iptables DROP rules for inter-bridge isolation.
 
 ### Implementation
 
@@ -429,7 +429,7 @@ A new vsock-based metadata service replaces the kernel command line for guest→
 ### Architecture
 
 ```
-Guest VM (PID 1: umut-init)
+Guest VM (PID 1: umu-init)
   │
   ├── vsock.Dial(CID=2, port=9998)  ← connects to host metadata service at boot
   │
@@ -454,7 +454,7 @@ Guest uses metadata → replaces /proc/cmdline for configuration
 | `internal/compute/config.go:BuildMetadataJSON()` | Serializes VMConfig + env vars into JSON payload |
 | `internal/compute/config.go:MetadataCID`, `MetadataServicePort` | Well-known vsock constants |
 | `internal/compute/vm.go` | Starts metadata server before `machine.Start()`, enables vsock when `MetadataJSON` is set |
-| `cmd/umut-init/main.go:fetchMetadata()` | Guest-side vsock client connecting to CID=2:9998 |
+| `cmd/umu-init/main.go:fetchMetadata()` | Guest-side vsock client connecting to CID=2:9998 |
 | `cmd/deploy.go`, `cmd/unfreeze.go` | Build `MetadataJSON` before VM launch |
 
 ---

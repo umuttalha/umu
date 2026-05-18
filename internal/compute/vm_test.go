@@ -68,7 +68,7 @@ func TestSendCtrlAltDel_Success(t *testing.T) {
 }
 
 func TestSendCtrlAltDel_NoSocket(t *testing.T) {
-	socketPath := "/tmp/nonexistent-umut-test.sock"
+	socketPath := "/tmp/nonexistent-umu-test.sock"
 	_ = os.Remove(socketPath)
 
 	err := SendCtrlAltDel(socketPath)
@@ -202,13 +202,13 @@ func TestIsSafeJailerPath(t *testing.T) {
 		{"srv root", "/srv", false},
 
 		// Invalid: paths outside jailer hierarchy
-		{"var lib umut", "/var/lib/umut", false},
-		{"var lib umut images", "/var/lib/umut/images", false},
+		{"var lib umu", "/var/lib/umu", false},
+		{"var lib umu images", "/var/lib/umu/images", false},
 		{"tmp", "/tmp", false},
 		{"home", "/home/user", false},
 
 		// Invalid: path traversal attempts
-		{"traversal to var", "/srv/jailer/firecracker/../../var/lib/umut", false},
+		{"traversal to var", "/srv/jailer/firecracker/../../var/lib/umu", false},
 		{"traversal to root", "/srv/jailer/firecracker/../../../..", false},
 
 		// Edge cases
@@ -241,7 +241,7 @@ func TestIsSafeJailerPath_WithJailerBaseDirConstant(t *testing.T) {
 }
 
 func TestStopVMByPID_EmptySocketPath_DoesNotDeleteWorkingDir(t *testing.T) {
-	// Create a temp directory structure simulating /var/lib/umut
+	// Create a temp directory structure simulating /var/lib/umu
 	tmpDir := t.TempDir()
 	imagesDir := filepath.Join(tmpDir, "images")
 	if err := os.MkdirAll(imagesDir, 0755); err != nil {
@@ -283,7 +283,7 @@ func TestCgroupNameFromSocketPath_Various(t *testing.T) {
 		expected   string
 	}{
 		{"jailer path", "/srv/jailer/firecracker/proj/root/proj.sock", "proj"},
-		{"old-style socket", "/var/lib/umut/sockets/test.sock", "test"},
+		{"old-style socket", "/var/lib/umu/sockets/test.sock", "test"},
 		{"dashed name", "/srv/jailer/firecracker/my-proj-v2/root/my-proj-v2.sock", "my-proj-v2"},
 	}
 
@@ -328,8 +328,8 @@ func TestSocketPathPermissions_DefaultConfig(t *testing.T) {
 }
 
 func TestLogDir(t *testing.T) {
-	if LogDir != "/var/lib/umut/logs" {
-		t.Errorf("LogDir = %s, expected /var/lib/umut/logs", LogDir)
+	if LogDir != "/var/lib/umu/logs" {
+		t.Errorf("LogDir = %s, expected /var/lib/umu/logs", LogDir)
 	}
 }
 

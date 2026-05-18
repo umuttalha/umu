@@ -22,9 +22,9 @@ var (
 )
 
 func init() {
-	dataDir := os.Getenv("UMUT_DATA_DIR")
+	dataDir := os.Getenv("UMU_DATA_DIR")
 	if dataDir == "" {
-		dataDir = "/var/lib/umut"
+		dataDir = "/var/lib/umu"
 	}
 	StateDir = dataDir
 	StateFile = filepath.Join(dataDir, "state.json")

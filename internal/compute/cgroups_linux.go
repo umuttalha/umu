@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	CgroupBaseDir    = "/sys/fs/cgroup/umut"
+	CgroupBaseDir    = "/sys/fs/cgroup/umu"
 	DefaultPidsMax   = 4096
 	// Default I/O bandwidth limits per VM: 100 MB/s read/write.
 	DefaultIOBandwidthBps = 100 * 1024 * 1024
@@ -33,10 +33,10 @@ func SetupCgroup(vmName string, pid int, vcpus int, memoryMB int, ioBandwidthBps
 	// Enable cpu, memory, io, and pids controllers for children of the base dir if not already enabled.
 	// In cgroups v2, a controller must be enabled in the parent's subtree_control before
 	// it can be delegated to a child. We attempt to enable at the root level first, then
-	// at the umut sub-group level. Failure is non-fatal (some kernels or configs may not support io).
+	// at the umu sub-group level. Failure is non-fatal (some kernels or configs may not support io).
 	subtreeControlRoot := "/sys/fs/cgroup/cgroup.subtree_control"
 	if _, err := os.Stat(subtreeControlRoot); err == nil {
-		// Enable pids+io at root level (needed for delegation to umut child group)
+		// Enable pids+io at root level (needed for delegation to umu child group)
 		_ = os.WriteFile(subtreeControlRoot, []byte("+pids +io"), 0644)
 	}
 	subtreeControl := filepath.Join(CgroupBaseDir, "cgroup.subtree_control")
@@ -74,7 +74,7 @@ func SetupCgroup(vmName string, pid int, vcpus int, memoryMB int, ioBandwidthBps
 	if ioBandwidthBps > 0 {
 		bw = ioBandwidthBps
 	}
-	diskPaths := append([]string{rootfsPath, "/var/lib/umut/images"}, extraDrives...)
+	diskPaths := append([]string{rootfsPath, "/var/lib/umu/images"}, extraDrives...)
 	if err := setIOMax(cgDir, bw, diskPaths); err != nil {
 		fmt.Printf("  warning: failed to set io.max in cgroup: %v\n", err)
 	}

@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/compute"
-	proj "github.com/umuttalha/umut/internal/project"
-	"github.com/umuttalha/umut/internal/routing"
-	"github.com/umuttalha/umut/internal/state"
+	"github.com/umuttalha/umu/internal/compute"
+	proj "github.com/umuttalha/umu/internal/project"
+	"github.com/umuttalha/umu/internal/routing"
+	"github.com/umuttalha/umu/internal/state"
 )
 
 var freezeForce bool
@@ -18,13 +18,13 @@ var freezeCmd = &cobra.Command{
 	Use:   "freeze <project-name>",
 	Short: "Freeze a running project (stop VM, keep data, remove from proxy)",
 	Long: `Freeze stops the Firecracker microVMs for a project without deleting any data.
-The project's disks remain intact and can be resumed with 'umut unfreeze'.
+The project's disks remain intact and can be resumed with 'umu unfreeze'.
 
 Caddy proxy routes are removed so the project becomes unreachable.
 
 Example:
-  umut freeze myproject
-  umut freeze myproject --force`,
+  umu freeze myproject
+  umu freeze myproject --force`,
 	Args: cobra.ExactArgs(1),
 	RunE: runFreeze,
 }
@@ -114,7 +114,7 @@ func runFreeze(cmd *cobra.Command, args []string) error {
 	elapsed := time.Since(start)
 	fmt.Println()
 	fmt.Printf("  ✓ Frozen %s  (%s)\n", projectName, elapsed.Round(time.Millisecond))
-	fmt.Printf("  Use 'umut unfreeze %s' to resume.\n", projectName)
+	fmt.Printf("  Use 'umu unfreeze %s' to resume.\n", projectName)
 
 	return nil
 }

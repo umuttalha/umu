@@ -31,7 +31,7 @@ type Config struct {
 
 func path() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".umut", "umut.toml")
+	return filepath.Join(home, ".umu", "umu.toml")
 }
 
 func Load() (*Config, error) {

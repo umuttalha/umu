@@ -11,7 +11,7 @@ func TestNameRegex(t *testing.T) {
 	valid := []string{
 		"api",
 		"my-app",
-		"blog.umut.space",
+		"blog.umu.space",
 		"app123",
 		"a0b",
 		"a-b",
@@ -78,18 +78,18 @@ func TestRouteHostname(t *testing.T) {
 }
 
 func TestDataDir(t *testing.T) {
-	os.Unsetenv("UMUT_DATA_DIR")
+	os.Unsetenv("UMU_DATA_DIR")
 	got := DataDir()
-	if got != "/var/lib/umut" {
-		t.Errorf("DataDir() = %q, want %q", got, "/var/lib/umut")
+	if got != "/var/lib/umu" {
+		t.Errorf("DataDir() = %q, want %q", got, "/var/lib/umu")
 	}
 
-	os.Setenv("UMUT_DATA_DIR", "/custom/data")
+	os.Setenv("UMU_DATA_DIR", "/custom/data")
 	got = DataDir()
 	if got != "/custom/data" {
 		t.Errorf("DataDir() with env = %q, want %q", got, "/custom/data")
 	}
-	os.Unsetenv("UMUT_DATA_DIR")
+	os.Unsetenv("UMU_DATA_DIR")
 }
 
 func TestNameRegexCompiles(t *testing.T) {

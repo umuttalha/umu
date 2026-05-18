@@ -10,7 +10,7 @@ import (
 )
 
 func TestStorageIntegration(t *testing.T) {
-	// This test requires a valid base.ext4 image in /var/lib/umut/images/
+	// This test requires a valid base.ext4 image in /var/lib/umu/images/
 	projectName := "teststorage"
 	targetPath := filepath.Join(ImagesDir, projectName+".ext4")
 

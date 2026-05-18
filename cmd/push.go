@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/config"
-	"github.com/umuttalha/umut/internal/s3"
-	"github.com/umuttalha/umut/internal/state"
+	"github.com/umuttalha/umu/internal/config"
+	"github.com/umuttalha/umu/internal/s3"
+	"github.com/umuttalha/umu/internal/state"
 )
 
 var pushList bool
@@ -17,14 +17,14 @@ var pushCmd = &cobra.Command{
 	Use:   "push <project-name>",
 	Short: "Archive a VM disk to S3",
 	Long: `Push uploads the VM's disk image to S3. The VM should be frozen first
-(umut freeze <name>). After successful upload, the local VM state is removed.
+(umu freeze <name>). After successful upload, the local VM state is removed.
 
 Use --list to see all archived VMs in S3.
 
 Examples:
-  umut freeze myserver
-  umut push myserver
-  umut push --list`,
+  umu freeze myserver
+  umu push myserver
+  umu push --list`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runPush,
 }
@@ -40,7 +40,7 @@ func runPush(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	if cfg.Storage.Provider != "s3" {
-		return fmt.Errorf("S3 storage not configured in ~/.umut/umut.toml")
+		return fmt.Errorf("S3 storage not configured in ~/.umu/umu.toml")
 	}
 
 	s3Client, err := s3.New(
@@ -86,7 +86,7 @@ func runPush(cmd *cobra.Command, args []string) error {
 	}
 
 	if project.Status == state.StatusRunning {
-		return fmt.Errorf("project %q is running — freeze it first: umut freeze %s", projectName, projectName)
+		return fmt.Errorf("project %q is running — freeze it first: umu freeze %s", projectName, projectName)
 	}
 
 	if len(project.Services) == 0 {
@@ -111,7 +111,7 @@ func runPush(cmd *cobra.Command, args []string) error {
 		DiskGB:      diskSizeGB,
 		GlobalIP:    svc.GlobalIP,
 		CreatedAt:   project.CreatedAt,
-		UmutVersion: Version,
+		UmuVersion: Version,
 	}
 
 	fmt.Printf("  ● Pushing %s to S3...\n", projectName)
@@ -125,7 +125,7 @@ func runPush(cmd *cobra.Command, args []string) error {
 
 	elapsed := time.Since(start)
 	fmt.Printf("  ✓ Pushed to s3://%s/%s/  (%s)\n", cfg.Storage.Bucket, projectName, elapsed.Round(time.Millisecond))
-	fmt.Printf("  → Restore: umut load %s\n", projectName)
+	fmt.Printf("  → Restore: umu load %s\n", projectName)
 
 	return nil
 }

@@ -20,9 +20,9 @@ import (
 var LogDir string
 
 func init() {
-	dataDir := os.Getenv("UMUT_DATA_DIR")
+	dataDir := os.Getenv("UMU_DATA_DIR")
 	if dataDir == "" {
-		dataDir = "/var/lib/umut"
+		dataDir = "/var/lib/umu"
 	}
 	LogDir = filepath.Join(dataDir, "logs")
 
@@ -262,7 +262,7 @@ func StopVMByPID(pid int, socketPath string) error {
 	// VMs, but CLI commands (deploy/destroy) exit before the goroutine runs.
 	// CRITICAL: Only clean up when socketPath is valid. An empty or invalid
 	// socketPath causes filepath.Dir("") → "." which would make os.RemoveAll(".")
-	// delete the current working directory (e.g. /var/lib/umut/images/).
+	// delete the current working directory (e.g. /var/lib/umu/images/).
 	if socketPath != "" {
 		jailerRoot := filepath.Dir(socketPath)
 		jailDir := filepath.Dir(jailerRoot)
@@ -340,9 +340,9 @@ func SendCtrlAltDel(socketPath string) error {
 
 // SnapshotDir returns the directory where snapshots are stored.
 func SnapshotDir() string {
-	dataDir := os.Getenv("UMUT_DATA_DIR")
+	dataDir := os.Getenv("UMU_DATA_DIR")
 	if dataDir == "" {
-		dataDir = "/var/lib/umut"
+		dataDir = "/var/lib/umu"
 	}
 	return filepath.Join(dataDir, "snapshots")
 }

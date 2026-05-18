@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/umuttalha/umut/internal/compute"
+	"github.com/umuttalha/umu/internal/compute"
 )
 
 const MetadataHTTPPort = 9071

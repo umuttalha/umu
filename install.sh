@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────
-# umut — bootstrap installer
-# Usage: curl -fsSL umut.space/install.sh | bash
+# umu — bootstrap installer
+# Usage: curl -fsSL umu.space/install.sh | bash
 # ─────────────────────────────────────────────
 
-UMUT_DIR="${UMUT_DATA_DIR:-/var/lib/umut}"
-UMUT_BIN="/usr/local/bin/umut"
+UMU_DIR="${UMU_DATA_DIR:-/var/lib/umu}"
+UMU_BIN="/usr/local/bin/umu"
 FC_VERSION="v1.15.1"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/vmlinux-5.10.223"
 ROOTFS_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/ubuntu-22.04.ext4"
@@ -53,7 +53,7 @@ verify_firecracker_sha256() {
 # ── Preflight checks ──────────────────────────
 
 echo ""
-echo "  umut installer"
+echo "  umu installer"
 echo "  ──────────────"
 echo ""
 
@@ -61,11 +61,11 @@ echo ""
 [[ $EUID -ne 0 ]] && fail "This script must be run as root (sudo)"
 
 # Must be Linux
-[[ "$(uname -s)" != "Linux" ]] && fail "umut requires Linux (detected: $(uname -s))"
+[[ "$(uname -s)" != "Linux" ]] && fail "umu requires Linux (detected: $(uname -s))"
 
 # Check architecture
 ARCH=$(uname -m)
-[[ "$ARCH" != "x86_64" ]] && fail "umut requires x86_64 (detected: $ARCH)"
+[[ "$ARCH" != "x86_64" ]] && fail "umu requires x86_64 (detected: $ARCH)"
 
 # Check Ubuntu version (warn if not 24.04)
 if [ -f /etc/os-release ]; then
@@ -80,11 +80,11 @@ info "Preflight checks passed"
 # ── Create directory structure ─────────────────
 
 info "Creating directory structure..."
-mkdir -p "$UMUT_DIR/images"
-mkdir -p "$UMUT_DIR/sockets"
+mkdir -p "$UMU_DIR/images"
+mkdir -p "$UMU_DIR/sockets"
 
 # Generate master encryption key for secrets at rest (if not exists)
-MASTER_KEY="$UMUT_DIR/master.key"
+MASTER_KEY="$UMU_DIR/master.key"
 if [[ ! -f "$MASTER_KEY" ]]; then
     openssl rand -hex 32 > "$MASTER_KEY"
     chmod 0400 "$MASTER_KEY"
@@ -165,17 +165,17 @@ fi
 
 # ── Download Linux kernel ──────────────────────
 
-if [[ -f "$UMUT_DIR/vmlinux" ]]; then
+if [[ -f "$UMU_DIR/vmlinux" ]]; then
     info "Kernel already present"
 else
     info "Downloading Linux kernel..."
-    curl -fsSL "$KERNEL_URL" -o "$UMUT_DIR/vmlinux"
-    chmod 644 "$UMUT_DIR/vmlinux"
+    curl -fsSL "$KERNEL_URL" -o "$UMU_DIR/vmlinux"
+    chmod 644 "$UMU_DIR/vmlinux"
 
     # Verify kernel checksum against known SHA256
-    KERNEL_ACTUAL=$(sha256sum "$UMUT_DIR/vmlinux" | awk '{print $1}')
+    KERNEL_ACTUAL=$(sha256sum "$UMU_DIR/vmlinux" | awk '{print $1}')
     if [[ "$KERNEL_ACTUAL" != "$KERNEL_SHA256" ]]; then
-        rm -f "$UMUT_DIR/vmlinux"
+        rm -f "$UMU_DIR/vmlinux"
         fail "Kernel checksum mismatch: expected $KERNEL_SHA256, got $KERNEL_ACTUAL"
     fi
     info "Kernel checksum verified"
@@ -184,38 +184,38 @@ fi
 
 # ── Create base rootfs ─────────────────────────
 
-if [[ -f "$UMUT_DIR/images/base.ext4" ]]; then
+if [[ -f "$UMU_DIR/images/base.ext4" ]]; then
     info "Base rootfs already present"
 else
     info "Creating base rootfs..."
 
     # Download pre-built Ubuntu rootfs from Firecracker CI
     info "Downloading base Ubuntu rootfs..."
-    curl -fsSL "$ROOTFS_URL" -o "$UMUT_DIR/images/base.ext4"
+    curl -fsSL "$ROOTFS_URL" -o "$UMU_DIR/images/base.ext4"
 
     # Verify rootfs checksum against known SHA256
-    ROOTFS_ACTUAL=$(sha256sum "$UMUT_DIR/images/base.ext4" | awk '{print $1}')
+    ROOTFS_ACTUAL=$(sha256sum "$UMU_DIR/images/base.ext4" | awk '{print $1}')
     if [[ "$ROOTFS_ACTUAL" != "$ROOTFS_SHA256" ]]; then
-        rm -f "$UMUT_DIR/images/base.ext4"
+        rm -f "$UMU_DIR/images/base.ext4"
         fail "Rootfs checksum mismatch: expected $ROOTFS_SHA256, got $ROOTFS_ACTUAL"
     fi
     info "Rootfs checksum verified"
 
     # Resize to 1GB so there's room for user apps
-    truncate -s 1G "$UMUT_DIR/images/base.ext4"
-    e2fsck -fp "$UMUT_DIR/images/base.ext4" > /dev/null 2>&1 || true
-    resize2fs "$UMUT_DIR/images/base.ext4" > /dev/null 2>&1
+    truncate -s 1G "$UMU_DIR/images/base.ext4"
+    e2fsck -fp "$UMU_DIR/images/base.ext4" > /dev/null 2>&1 || true
+    resize2fs "$UMU_DIR/images/base.ext4" > /dev/null 2>&1
 
-    # Mount and customize for umut networking
+    # Mount and customize for umu networking
     MOUNT_DIR=$(mktemp -d)
-    mount "$UMUT_DIR/images/base.ext4" "$MOUNT_DIR"
+    mount "$UMU_DIR/images/base.ext4" "$MOUNT_DIR"
 
     # Create a startup script that configures networking from kernel args
-    cat > "$MOUNT_DIR/usr/local/bin/umut-net-setup.sh" << 'NETSCRIPT'
+    cat > "$MOUNT_DIR/usr/local/bin/umu-net-setup.sh" << 'NETSCRIPT'
 #!/bin/bash
-# Parse IP from kernel command line (set by umut)
-GUEST_IP=$(cat /proc/cmdline | grep -oP 'umut.ip=\K[^ ]+')
-GATEWAY=$(cat /proc/cmdline | grep -oP 'umut.gw=\K[^ ]+')
+# Parse IP from kernel command line (set by umu)
+GUEST_IP=$(cat /proc/cmdline | grep -oP 'umu.ip=\K[^ ]+')
+GATEWAY=$(cat /proc/cmdline | grep -oP 'umu.gw=\K[^ ]+')
 
 if [[ -n "$GUEST_IP" && -n "$GATEWAY" ]]; then
     ip addr add "${GUEST_IP}/24" dev eth0 2>/dev/null || true
@@ -227,10 +227,10 @@ if [[ -n "$GUEST_IP" && -n "$GATEWAY" ]]; then
     echo "nameserver 8.8.8.8" >> /etc/resolv.conf
 fi
 NETSCRIPT
-    chmod +x "$MOUNT_DIR/usr/local/bin/umut-net-setup.sh"
+    chmod +x "$MOUNT_DIR/usr/local/bin/umu-net-setup.sh"
 
     # Create systemd service for network setup
-    cat > "$MOUNT_DIR/etc/systemd/system/umut-network.service" << 'SERVICE'
+    cat > "$MOUNT_DIR/etc/systemd/system/umu-network.service" << 'SERVICE'
 [Unit]
 Description=Umut Network Setup
 Before=network.target
@@ -238,7 +238,7 @@ After=local-fs.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/umut-net-setup.sh
+ExecStart=/usr/local/bin/umu-net-setup.sh
 RemainAfterExit=yes
 
 [Install]
@@ -246,29 +246,29 @@ WantedBy=multi-user.target
 SERVICE
 
     # Enable the network service
-    chroot "$MOUNT_DIR" systemctl enable umut-network.service > /dev/null 2>&1 || true
+    chroot "$MOUNT_DIR" systemctl enable umu-network.service > /dev/null 2>&1 || true
 
     # Create /workspace directory on the rootfs so shared-root VMs have a mount point
     mkdir -p "$MOUNT_DIR/workspace"
     chmod 0755 "$MOUNT_DIR/workspace"
 
     # Set hostname
-    echo "umut-vm" > "$MOUNT_DIR/etc/hostname"
+    echo "umu-vm" > "$MOUNT_DIR/etc/hostname"
 
-    # Install umut-init as /sbin/init so VMs auto-start user apps
-    if [[ -f /usr/local/bin/umut-init ]]; then
+    # Install umu-init as /sbin/init so VMs auto-start user apps
+    if [[ -f /usr/local/bin/umu-init ]]; then
         rm -f "$MOUNT_DIR/sbin/init"
-        cp /usr/local/bin/umut-init "$MOUNT_DIR/sbin/init"
+        cp /usr/local/bin/umu-init "$MOUNT_DIR/sbin/init"
         chmod +x "$MOUNT_DIR/sbin/init"
-        info "umut-init installed as PID 1 on base image"
+        info "umu-init installed as PID 1 on base image"
     fi
 
     umount "$MOUNT_DIR"
     rmdir "$MOUNT_DIR"
 
     # Hard-link or copy kernel image for jailer access
-    mkdir -p "$UMUT_DIR/checksums"
-    sha256sum "$UMUT_DIR/images/base.ext4" > "$UMUT_DIR/checksums/base.ext4.sha256"
+    mkdir -p "$UMU_DIR/checksums"
+    sha256sum "$UMU_DIR/images/base.ext4" > "$UMU_DIR/checksums/base.ext4.sha256"
     info "Base rootfs checksum saved"
 
     info "Base rootfs created (1GB)"
@@ -276,14 +276,14 @@ fi
 
 # ── Create python-base.ext4 (shared read-only root with Python 3 + AI packages) ──
 
-if [ ! -f "$UMUT_DIR/images/python-base.ext4" ]; then
+if [ ! -f "$UMU_DIR/images/python-base.ext4" ]; then
     info "Creating shared read-only root image (python-base.ext4)..."
-    cp --reflink=auto "$UMUT_DIR/images/base.ext4" "$UMUT_DIR/images/python-base.ext4"
-    e2fsck -f -p "$UMUT_DIR/images/python-base.ext4"
-    resize2fs "$UMUT_DIR/images/python-base.ext4" 2G
+    cp --reflink=auto "$UMU_DIR/images/base.ext4" "$UMU_DIR/images/python-base.ext4"
+    e2fsck -f -p "$UMU_DIR/images/python-base.ext4"
+    resize2fs "$UMU_DIR/images/python-base.ext4" 2G
 
     MOUNT_DIR=$(mktemp -d)
-    mount "$UMUT_DIR/images/python-base.ext4" "$MOUNT_DIR"
+    mount "$UMU_DIR/images/python-base.ext4" "$MOUNT_DIR"
 
     cp /etc/resolv.conf "$MOUNT_DIR/etc/resolv.conf"
 
@@ -330,8 +330,8 @@ if [ ! -f "$UMUT_DIR/images/python-base.ext4" ]; then
     $PIP_CMD anyio sniffio certifi charset-normalizer 2>/dev/null || true
     $PIP_CMD idna urllib3 tqdm annotated-types 2>/dev/null || true
 
-    info "Writing package manifest to /etc/umut-packages.txt..."
-    cat > "$MOUNT_DIR/etc/umut-packages.txt" << 'MANIFEST'
+    info "Writing package manifest to /etc/umu-packages.txt..."
+    cat > "$MOUNT_DIR/etc/umu-packages.txt" << 'MANIFEST'
 numpy
 pandas
 langchain
@@ -373,31 +373,31 @@ MANIFEST
         info "Python verified in shared root image"
     fi
 
-    # Install umut-init as /sbin/init so VMs auto-start user apps
-    if [[ -f /usr/local/bin/umut-init ]]; then
+    # Install umu-init as /sbin/init so VMs auto-start user apps
+    if [[ -f /usr/local/bin/umu-init ]]; then
         rm -f "$MOUNT_DIR/sbin/init"
-        cp /usr/local/bin/umut-init "$MOUNT_DIR/sbin/init"
+        cp /usr/local/bin/umu-init "$MOUNT_DIR/sbin/init"
         chmod +x "$MOUNT_DIR/sbin/init"
-        info "umut-init installed as PID 1 on python-base"
+        info "umu-init installed as PID 1 on python-base"
     fi
 
     umount "$MOUNT_DIR"
     rmdir "$MOUNT_DIR"
-    sha256sum "$UMUT_DIR/images/python-base.ext4" > "$UMUT_DIR/checksums/python-base.ext4.sha256"
+    sha256sum "$UMU_DIR/images/python-base.ext4" > "$UMU_DIR/checksums/python-base.ext4.sha256"
     info "Shared root image checksum saved"
     info "python-base.ext4 created (2GB, Python 3.12 + AI/ML packages pre-installed)"
 fi
 
 # ── Create deno-base.ext4 (shared read-only root with Deno runtime) ──
 
-if [ ! -f "$UMUT_DIR/images/deno-base.ext4" ]; then
+if [ ! -f "$UMU_DIR/images/deno-base.ext4" ]; then
     info "Creating shared read-only root image (deno-base.ext4)..."
-    cp --reflink=auto "$UMUT_DIR/images/base.ext4" "$UMUT_DIR/images/deno-base.ext4"
-    e2fsck -f -p "$UMUT_DIR/images/deno-base.ext4"
-    resize2fs "$UMUT_DIR/images/deno-base.ext4" 512M
+    cp --reflink=auto "$UMU_DIR/images/base.ext4" "$UMU_DIR/images/deno-base.ext4"
+    e2fsck -f -p "$UMU_DIR/images/deno-base.ext4"
+    resize2fs "$UMU_DIR/images/deno-base.ext4" 512M
 
     MOUNT_DIR=$(mktemp -d)
-    mount "$UMUT_DIR/images/deno-base.ext4" "$MOUNT_DIR"
+    mount "$UMU_DIR/images/deno-base.ext4" "$MOUNT_DIR"
 
     cp /etc/resolv.conf "$MOUNT_DIR/etc/resolv.conf"
 
@@ -421,22 +421,22 @@ if [ ! -f "$UMUT_DIR/images/deno-base.ext4" ]; then
         ln -sf /usr/local/bin/deno /usr/bin/deno
     ' 2>/dev/null || true
 
-    info "Writing runtime manifest to /etc/umut-packages.txt..."
-    echo "deno" > "$MOUNT_DIR/etc/umut-packages.txt"
+    info "Writing runtime manifest to /etc/umu-packages.txt..."
+    echo "deno" > "$MOUNT_DIR/etc/umu-packages.txt"
 
     rm -f "$MOUNT_DIR/etc/resolv.conf"
 
-    # Install umut-init as /sbin/init so VMs auto-start user apps
-    if [[ -f /usr/local/bin/umut-init ]]; then
+    # Install umu-init as /sbin/init so VMs auto-start user apps
+    if [[ -f /usr/local/bin/umu-init ]]; then
         rm -f "$MOUNT_DIR/sbin/init"
-        cp /usr/local/bin/umut-init "$MOUNT_DIR/sbin/init"
+        cp /usr/local/bin/umu-init "$MOUNT_DIR/sbin/init"
         chmod +x "$MOUNT_DIR/sbin/init"
-        info "umut-init installed as PID 1 on deno-base"
+        info "umu-init installed as PID 1 on deno-base"
     fi
 
     umount "$MOUNT_DIR"
     rmdir "$MOUNT_DIR"
-    sha256sum "$UMUT_DIR/images/deno-base.ext4" > "$UMUT_DIR/checksums/deno-base.ext4.sha256"
+    sha256sum "$UMU_DIR/images/deno-base.ext4" > "$UMU_DIR/checksums/deno-base.ext4.sha256"
     info "Shared root image checksum saved"
     info "deno-base.ext4 created (512MB, Deno runtime pre-installed)"
 fi
@@ -451,7 +451,7 @@ build_dns_local() {
     info "Building dns-local..."
     local build_dir
     build_dir=$(mktemp -d)
-    local repo="https://github.com/umuttalha/umut.git"
+    local repo="https://github.com/umutalha/umu.git"
 
     if ! command -v go &> /dev/null; then
         local go_ver="1.24.5"
@@ -462,10 +462,10 @@ build_dns_local() {
         info "Go ${go_ver} installed"
     fi
 
-    git clone --depth 1 "$repo" "$build_dir/umut" 2>/dev/null || {
+    git clone --depth 1 "$repo" "$build_dir/umu" 2>/dev/null || {
         fail "Could not clone $repo"
     }
-    (cd "$build_dir/umut" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o /usr/local/bin/dns-local ./cmd/dns-local/)
+    (cd "$build_dir/umu" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o /usr/local/bin/dns-local ./cmd/dns-local/)
     chmod +x /usr/local/bin/dns-local
     rm -rf "$build_dir"
     info "dns-local built and installed"
@@ -515,7 +515,7 @@ download_quickwit() {
 # ── Build quickwit-base.ext4 ───────────────────
 
 build_quickwit_base() {
-    local base="$UMUT_DIR/images/quickwit-base.ext4"
+    local base="$UMU_DIR/images/quickwit-base.ext4"
     if [ -f "$base" ]; then
         info "quickwit-base.ext4 already present"
         return
@@ -532,7 +532,7 @@ build_quickwit_base() {
     mkdir -p "$mnt/lib/x86_64-linux-gnu"
     mkdir -p "$mnt/etc/ssl/certs"
 
-    cp /usr/local/bin/umut-init "$mnt/sbin/init"
+    cp /usr/local/bin/umu-init "$mnt/sbin/init"
     chmod +x "$mnt/sbin/init"
 
     cp /usr/local/bin/quickwit "$mnt/usr/local/bin/quickwit"
@@ -570,7 +570,7 @@ build_quickwit_base() {
     chown 1000:1000 "$base" 2>/dev/null || true
     chmod 0640 "$base"
 
-    sha256sum "$base" > "$UMUT_DIR/checksums/quickwit-base.ext4.sha256"
+    sha256sum "$base" > "$UMU_DIR/checksums/quickwit-base.ext4.sha256"
     info "quickwit-base.ext4 created (500MB)"
 }
 
@@ -584,7 +584,7 @@ build_sqlite_server() {
     info "Building sqlite-server..."
     local build_dir
     build_dir=$(mktemp -d)
-    local repo="https://github.com/umuttalha/umut.git"
+    local repo="https://github.com/umutalha/umu.git"
 
     if ! command -v go &> /dev/null; then
         local go_ver="1.24.5"
@@ -595,10 +595,10 @@ build_sqlite_server() {
         info "Go ${go_ver} installed"
     fi
 
-    git clone --depth 1 "$repo" "$build_dir/umut" 2>/dev/null || {
+    git clone --depth 1 "$repo" "$build_dir/umu" 2>/dev/null || {
         fail "Could not clone $repo"
     }
-    (cd "$build_dir/umut" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o /usr/local/bin/sqlite-server ./cmd/sqlite-server/)
+    (cd "$build_dir/umu" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o /usr/local/bin/sqlite-server ./cmd/sqlite-server/)
     chmod +x /usr/local/bin/sqlite-server
     rm -rf "$build_dir"
     info "sqlite-server built and installed"
@@ -607,7 +607,7 @@ build_sqlite_server() {
 # ── Build sqlite-base image ───────────────────
 
 build_sqlite_base() {
-    local base="$UMUT_DIR/images/sqlite-base.ext4"
+    local base="$UMU_DIR/images/sqlite-base.ext4"
     if [ -f "$base" ]; then
         info "sqlite-base.ext4 already present"
         return
@@ -623,7 +623,7 @@ build_sqlite_base() {
     mkdir -p "$mnt"/{bin,dev,etc,proc,sys,tmp,usr/local/bin,sbin,workspace}
     mkdir -p "$mnt/etc/ssl/certs"
 
-    cp /usr/local/bin/umut-init "$mnt/sbin/init"
+    cp /usr/local/bin/umu-init "$mnt/sbin/init"
     chmod +x "$mnt/sbin/init"
 
     cp /usr/local/bin/sqlite-server "$mnt/usr/local/bin/sqlite-server"
@@ -642,7 +642,7 @@ build_sqlite_base() {
     chown 1000:1000 "$base" 2>/dev/null || true
     chmod 0640 "$base"
 
-    sha256sum "$base" > "$UMUT_DIR/checksums/sqlite-base.ext4.sha256"
+    sha256sum "$base" > "$UMU_DIR/checksums/sqlite-base.ext4.sha256"
     info "sqlite-base.ext4 created (128MB)"
 }
 
@@ -660,13 +660,13 @@ else
     info "CNI plugins installed"
 fi
 
-# Create CNI network config for umut (shared bridge with isolated namespaces per VM)
+# Create CNI network config for umu (shared bridge with isolated namespaces per VM)
 CNI_CONF_DIR="/etc/cni/conf.d"
 mkdir -p "$CNI_CONF_DIR"
 
-cat > "$CNI_CONF_DIR/umut.conflist" << 'CNICONF'
+cat > "$CNI_CONF_DIR/umu.conflist" << 'CNICONF'
 {
-  "name": "umut",
+  "name": "umu",
    "cniVersion": "1.0.0",
    "plugins": [
      {
@@ -688,7 +688,7 @@ cat > "$CNI_CONF_DIR/umut.conflist" << 'CNICONF'
  }
 CNICONF
 
-info "CNI network config created at $CNI_CONF_DIR/umut.conflist"
+info "CNI network config created at $CNI_CONF_DIR/umu.conflist"
 
 # ── Install Caddy ─────────────────────────────
 
@@ -712,7 +712,7 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
 }
 CADDY
 
-# Load initial JSON config with an empty server for umut
+# Load initial JSON config with an empty server for umu
 curl -s -X POST http://localhost:2019/load \
     -H "Content-Type: application/json" \
     -d '{
@@ -720,7 +720,7 @@ curl -s -X POST http://localhost:2019/load \
         "apps": {
             "http": {
                 "servers": {
-                    "umut": {
+                    "umu": {
                         "listen": [":80", ":443"],
                         "routes": []
                     }
@@ -739,7 +739,7 @@ info "Configuring system networking..."
 # Enable IP forwarding (IPv4 + IPv6)
 sysctl -w net.ipv4.ip_forward=1 > /dev/null 2>&1
 sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null 2>&1
-cat > /etc/sysctl.d/99-umut.conf << 'SYSCTL'
+cat > /etc/sysctl.d/99-umu.conf << 'SYSCTL'
 net.ipv4.ip_forward=1
 net.ipv6.conf.all.forwarding=1
 SYSCTL
@@ -780,30 +780,30 @@ else
     warn "Could not detect primary network interface — firewall not configured"
 fi
 
-# ── Create umut system user for jailer ─────────
+# ── Create umu system user for jailer ─────────
 
 JAILER_UID=1000
 JAILER_GID=1000
 
-if getent group umut &> /dev/null; then
-    info "umut group already exists"
+if getent group umu &> /dev/null; then
+    info "umu group already exists"
 else
-    groupadd --gid "$JAILER_GID" umut
-    info "Created umut group (gid=$JAILER_GID)"
+    groupadd --gid "$JAILER_GID" umu
+    info "Created umu group (gid=$JAILER_GID)"
 fi
 
-if id umut &> /dev/null; then
-    info "umut user already exists"
+if id umu &> /dev/null; then
+    info "umu user already exists"
 else
-    useradd --uid "$JAILER_UID" --gid "$JAILER_GID" --no-create-home --system --shell /usr/sbin/nologin umut
-    info "Created umut user (uid=$JAILER_UID, gid=$JAILER_GID)"
+    useradd --uid "$JAILER_UID" --gid "$JAILER_GID" --no-create-home --system --shell /usr/sbin/nologin umu
+    info "Created umu user (uid=$JAILER_UID, gid=$JAILER_GID)"
 fi
 
-# Add umut to kvm group (needed for /dev/kvm access)
+# Add umu to kvm group (needed for /dev/kvm access)
 if getent group kvm &> /dev/null; then
-    if ! id -nG umut 2>/dev/null | grep -qw kvm; then
-        usermod -a -G kvm umut
-        info "Added umut user to kvm group"
+    if ! id -nG umu 2>/dev/null | grep -qw kvm; then
+        usermod -a -G kvm umu
+        info "Added umu user to kvm group"
     fi
 fi
 
@@ -812,52 +812,52 @@ fi
 JAILER_DIR="/srv/jailer"
 if [[ ! -d "$JAILER_DIR" ]]; then
     mkdir -p "$JAILER_DIR"
-    chown root:umut "$JAILER_DIR"
+    chown root:umu "$JAILER_DIR"
     chmod 0750 "$JAILER_DIR"
-    info "Created jailer chroot base directory ($JAILER_DIR, root:umut 0750)"
+    info "Created jailer chroot base directory ($JAILER_DIR, root:umu 0750)"
 else
-    chown root:umut "$JAILER_DIR" 2>/dev/null || true
+    chown root:umu "$JAILER_DIR" 2>/dev/null || true
     chmod 0750 "$JAILER_DIR" 2>/dev/null || true
 fi
 
-# Ensure umut data directory is accessible by jailer user
-chown -R root:umut "$UMUT_DIR"
-chmod -R 0750 "$UMUT_DIR"
-chmod 0755 "$UMUT_DIR"  # directories need exec bit
+# Ensure umu data directory is accessible by jailer user
+chown -R root:umu "$UMU_DIR"
+chmod -R 0750 "$UMU_DIR"
+chmod 0755 "$UMU_DIR"  # directories need exec bit
 
 # Fix permissions on sockets directory for jailer
-chmod 0770 "$UMUT_DIR/sockets" 2>/dev/null || true
+chmod 0770 "$UMU_DIR/sockets" 2>/dev/null || true
 
-# Ensure kernel image and images dir are readable by umut group
-if [[ -f "$UMUT_DIR/vmlinux" ]]; then
-    chmod 0640 "$UMUT_DIR/vmlinux"
-    chgrp umut "$UMUT_DIR/vmlinux" 2>/dev/null || true
+# Ensure kernel image and images dir are readable by umu group
+if [[ -f "$UMU_DIR/vmlinux" ]]; then
+    chmod 0640 "$UMU_DIR/vmlinux"
+    chgrp umu "$UMU_DIR/vmlinux" 2>/dev/null || true
 fi
-chmod 0750 "$UMUT_DIR/images" 2>/dev/null || true
-chgrp umut "$UMUT_DIR/images" 2>/dev/null || true
-if [[ -d "$UMUT_DIR/images" ]]; then
-    chmod 0640 "$UMUT_DIR/images"/*.ext4 2>/dev/null || true
-    chgrp umut "$UMUT_DIR/images"/*.ext4 2>/dev/null || true
+chmod 0750 "$UMU_DIR/images" 2>/dev/null || true
+chgrp umu "$UMU_DIR/images" 2>/dev/null || true
+if [[ -d "$UMU_DIR/images" ]]; then
+    chmod 0640 "$UMU_DIR/images"/*.ext4 2>/dev/null || true
+    chgrp umu "$UMU_DIR/images"/*.ext4 2>/dev/null || true
 fi
 
-# ── Install umut binary ───────────────────────
+# ── Install umu binary ───────────────────────
 
-if [[ -x "$UMUT_BIN" ]]; then
-    info "umut already installed ($(umut version 2>/dev/null || echo "installed"))"
+if [[ -x "$UMU_BIN" ]]; then
+    info "umu already installed ($(umu version 2>/dev/null || echo "installed"))"
 else
     # Try GitHub Release first
-    RELEASE_URL="https://github.com/umuttalha/umut/releases/latest/download/umut-linux-amd64"
+    RELEASE_URL="https://github.com/umutalha/umu/releases/latest/download/umu-linux-amd64"
     if curl -fsSL --head "$RELEASE_URL" > /dev/null 2>&1; then
-        info "Downloading umut from GitHub Releases..."
-        curl -fsSL "$RELEASE_URL" -o "$UMUT_BIN"
-        chmod +x "$UMUT_BIN"
-        info "umut installed from release"
+        info "Downloading umu from GitHub Releases..."
+        curl -fsSL "$RELEASE_URL" -o "$UMU_BIN"
+        chmod +x "$UMU_BIN"
+        info "umu installed from release"
     else
         # Build from source
         info "No release binary found — building from source..."
 
         GO_VERSION="1.24.5"
-        REPO="https://github.com/umuttalha/umut.git"
+        REPO="https://github.com/umutalha/umu.git"
         BUILD_DIR=$(mktemp -d)
 
         # Install Go if missing
@@ -870,19 +870,19 @@ else
         fi
 
         # Clone and build
-        info "Cloning umut repository..."
-        git clone --depth 1 "$REPO" "$BUILD_DIR/umut" 2>/dev/null || {
+        info "Cloning umu repository..."
+        git clone --depth 1 "$REPO" "$BUILD_DIR/umu" 2>/dev/null || {
             fail "Could not clone $REPO — check network or provide binary manually"
         }
 
-        info "Building umut..."
-        cd "$BUILD_DIR/umut"
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o "$UMUT_BIN" .
-        chmod +x "$UMUT_BIN"
+        info "Building umu..."
+        cd "$BUILD_DIR/umu"
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o "$UMU_BIN" .
+        chmod +x "$UMU_BIN"
 
         cd /
         rm -rf "$BUILD_DIR"
-        info "umut built from source and installed"
+        info "umu built from source and installed"
     fi
 fi
 
@@ -890,7 +890,7 @@ fi
 
 HOST_PUBLIC_IP=$(curl -4 -fsSL --max-time 3 https://ifconfig.me 2>/dev/null || curl -4 -fsSL --max-time 3 https://api.ipify.org 2>/dev/null || echo "")
 if [[ -n "$HOST_PUBLIC_IP" ]]; then
-    echo "$HOST_PUBLIC_IP" > "$UMUT_DIR/host-ip"
+    echo "$HOST_PUBLIC_IP" > "$UMU_DIR/host-ip"
     info "Host public IP: $HOST_PUBLIC_IP (saved for display)"
 else
     warn "Could not detect public IP — external display won't show"
@@ -899,13 +899,13 @@ fi
 # ── Setup Login MOTD ──────────────────────────
 
 info "Setting up login message..."
-cat > /etc/profile.d/99-umut.sh << 'EOF'
-if [ -n "$PS1" ] && command -v umut >/dev/null 2>&1; then
+cat > /etc/profile.d/99-umu.sh << 'EOF'
+if [ -n "$PS1" ] && command -v umu >/dev/null 2>&1; then
     echo ""
-    umut list
+    umu list
 fi
 EOF
-chmod +x /etc/profile.d/99-umut.sh
+chmod +x /etc/profile.d/99-umu.sh
 
 # ── Quickwit runtime ───────────────────────────
 
@@ -921,9 +921,9 @@ build_sqlite_base
 # ── Done ──────────────────────────────────────
 
 echo ""
-echo -e "  ${GREEN}✓${NC} umut installed successfully"
+echo -e "  ${GREEN}✓${NC} umu installed successfully"
 echo ""
 echo "  Next steps:"
-echo "    umut deploy myproject    # deploy your first project"
-echo "    umut list                # see running projects"
+echo "    umu deploy myproject    # deploy your first project"
+echo "    umu list                # see running projects"
 echo ""

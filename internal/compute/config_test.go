@@ -35,11 +35,11 @@ func TestBuildKernelArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(args, "umut.ip=10.0.0.2") {
-		t.Errorf("expected umut.ip in args, got %s", args)
+	if !strings.Contains(args, "umu.ip=10.0.0.2") {
+		t.Errorf("expected umu.ip in args, got %s", args)
 	}
-	if !strings.Contains(args, "umut.gw=172.26.0.1") {
-		t.Errorf("expected umut.gw in args, got %s", args)
+	if !strings.Contains(args, "umu.gw=172.26.0.1") {
+		t.Errorf("expected umu.gw in args, got %s", args)
 	}
 }
 
@@ -125,18 +125,18 @@ func TestStripInitArg_RemovesInitEquals(t *testing.T) {
 	}{
 		{
 			name: "removes init=/workspace/sbin/init",
-			args: "console=ttyS0 umut.ip=10.0.0.2 init=/workspace/sbin/init umut.gw=172.26.0.1",
-			want: "console=ttyS0 umut.ip=10.0.0.2 umut.gw=172.26.0.1",
+			args: "console=ttyS0 umu.ip=10.0.0.2 init=/workspace/sbin/init umu.gw=172.26.0.1",
+			want: "console=ttyS0 umu.ip=10.0.0.2 umu.gw=172.26.0.1",
 		},
 		{
 			name: "removes init=/sbin/init",
-			args: "console=ttyS0 init=/sbin/init umut.ip=10.0.0.2",
-			want: "console=ttyS0 umut.ip=10.0.0.2",
+			args: "console=ttyS0 init=/sbin/init umu.ip=10.0.0.2",
+			want: "console=ttyS0 umu.ip=10.0.0.2",
 		},
 		{
 			name: "no-op on clean args",
-			args: "console=ttyS0 umut.ip=10.0.0.2 umut.gw=172.26.0.1",
-			want: "console=ttyS0 umut.ip=10.0.0.2 umut.gw=172.26.0.1",
+			args: "console=ttyS0 umu.ip=10.0.0.2 umu.gw=172.26.0.1",
+			want: "console=ttyS0 umu.ip=10.0.0.2 umu.gw=172.26.0.1",
 		},
 		{
 			name: "only init= arg",
@@ -220,7 +220,7 @@ func TestBuildKernelArgs_NeverProducesInitEquals(t *testing.T) {
 
 func TestStripInitArg_PreservesOtherArgs(t *testing.T) {
 	// Ensure StripInitArg doesn't corrupt other kernel arguments
-	args := "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.force_probe=1 root=/dev/vda ro umut.ip=172.26.1.2 umut.gw=172.26.0.1 umut.hosts=172.26.1.2:main umut.vols=/dev/vdb:/workspace init=/workspace/sbin/init"
+	args := "console=ttyS0 reboot=k panic=1 pci=off virtio_mmio.force_probe=1 root=/dev/vda ro umu.ip=172.26.1.2 umu.gw=172.26.0.1 umu.hosts=172.26.1.2:main umu.vols=/dev/vdb:/workspace init=/workspace/sbin/init"
 	got := StripInitArg(args)
 
 	// Must preserve all important args
@@ -229,10 +229,10 @@ func TestStripInitArg_PreservesOtherArgs(t *testing.T) {
 		"reboot=k",
 		"panic=1",
 		"root=/dev/vda",
-		"umut.ip=172.26.1.2",
-		"umut.gw=172.26.0.1",
-		"umut.hosts=172.26.1.2:main",
-		"umut.vols=/dev/vdb:/workspace",
+		"umu.ip=172.26.1.2",
+		"umu.gw=172.26.0.1",
+		"umu.hosts=172.26.1.2:main",
+		"umu.vols=/dev/vdb:/workspace",
 	}
 	for _, part := range requiredParts {
 		if !strings.Contains(got, part) {

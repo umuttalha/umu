@@ -9,12 +9,12 @@ import (
 func TestLoad_SampleConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	os.MkdirAll(filepath.Join(dir, ".umut"), 0700)
-	os.WriteFile(filepath.Join(dir, ".umut", "umut.toml"), []byte(`
+	os.MkdirAll(filepath.Join(dir, ".umu"), 0700)
+	os.WriteFile(filepath.Join(dir, ".umu", "umu.toml"), []byte(`
 [storage]
 provider = "s3"
 endpoint = "https://s3.amazonaws.com"
-bucket = "umut-backups"
+bucket = "umu-backups"
 access_key = "AKID"
 secret_key = "secret"
 region = "us-east-1"
@@ -33,8 +33,8 @@ zone_id = "abc123"
 	if cfg.Storage.Provider != "s3" {
 		t.Errorf("storage.provider = %q, want s3", cfg.Storage.Provider)
 	}
-	if cfg.Storage.Bucket != "umut-backups" {
-		t.Errorf("storage.bucket = %q, want umut-backups", cfg.Storage.Bucket)
+	if cfg.Storage.Bucket != "umu-backups" {
+		t.Errorf("storage.bucket = %q, want umu-backups", cfg.Storage.Bucket)
 	}
 	if cfg.Storage.Region != "us-east-1" {
 		t.Errorf("storage.region = %q, want us-east-1", cfg.Storage.Region)
@@ -66,8 +66,8 @@ func TestLoad_MissingFile(t *testing.T) {
 func TestLoad_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	os.MkdirAll(filepath.Join(dir, ".umut"), 0700)
-	os.WriteFile(filepath.Join(dir, ".umut", "umut.toml"), []byte(""), 0600)
+	os.MkdirAll(filepath.Join(dir, ".umu"), 0700)
+	os.WriteFile(filepath.Join(dir, ".umu", "umu.toml"), []byte(""), 0600)
 
 	cfg, err := Load()
 	if err != nil {

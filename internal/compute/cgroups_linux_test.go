@@ -41,7 +41,7 @@ func TestSetIOMax_TargetFormat(t *testing.T) {
 		t.Fatalf("mkdir cgDir: %v", err)
 	}
 
-	const imagesDir = "/var/lib/umut/images"
+	const imagesDir = "/var/lib/umu/images"
 	devMM, err := getDeviceMajorMinor(imagesDir)
 	if err != nil {
 		t.Skipf("skipping: cannot stat %s (likely not on Linux host with this path): %v", imagesDir, err)
@@ -69,7 +69,7 @@ func TestSetIOMax_CustomBandwidth(t *testing.T) {
 		t.Fatalf("mkdir cgDir: %v", err)
 	}
 
-	const imagesDir = "/var/lib/umut/images"
+	const imagesDir = "/var/lib/umu/images"
 	devMM, err := getDeviceMajorMinor(imagesDir)
 	if err != nil {
 		t.Skipf("skipping: cannot stat %s: %v", imagesDir, err)
@@ -109,7 +109,7 @@ func TestSetIOMax_Deduplication(t *testing.T) {
 		t.Skip("skipping: requires root to write to cgroupfs")
 	}
 
-	tmpDir, err := os.MkdirTemp("/sys/fs/cgroup", "umut-test-*")
+	tmpDir, err := os.MkdirTemp("/sys/fs/cgroup", "umu-test-*")
 	if err != nil {
 		t.Skipf("skipping: cannot create test cgroup: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestSetIOMax_MultipleDevices(t *testing.T) {
 
 	// Use rootfs path + images dir as disk paths; if they're the same device
 	// the dedup logic should handle it gracefully.
-	paths := []string{"/var/lib/umut/images", "/"}
+	paths := []string{"/var/lib/umu/images", "/"}
 	err := setIOMax(cgDir, DefaultIOBandwidthBps, paths)
 	if err != nil {
 		t.Fatalf("setIOMax multi-device: %v", err)

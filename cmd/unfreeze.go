@@ -6,13 +6,13 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/compute"
-	"github.com/umuttalha/umut/internal/health"
-	"github.com/umuttalha/umut/internal/metadata"
-	"github.com/umuttalha/umut/internal/network"
-	proj "github.com/umuttalha/umut/internal/project"
-	"github.com/umuttalha/umut/internal/routing"
-	"github.com/umuttalha/umut/internal/state"
+	"github.com/umuttalha/umu/internal/compute"
+	"github.com/umuttalha/umu/internal/health"
+	"github.com/umuttalha/umu/internal/metadata"
+	"github.com/umuttalha/umu/internal/network"
+	proj "github.com/umuttalha/umu/internal/project"
+	"github.com/umuttalha/umu/internal/routing"
+	"github.com/umuttalha/umu/internal/state"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -25,7 +25,7 @@ All persistent data is preserved and re-attached.
 Caddy proxy routes are re-added so the project becomes reachable again.
 
 Example:
-  umut unfreeze myproject`,
+  umu unfreeze myproject`,
 	Args: cobra.ExactArgs(1),
 	RunE: runUnfreeze,
 }
@@ -53,7 +53,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 	}
 
 	if project.Status != state.StatusFrozen {
-		return fmt.Errorf("project %q is %s (use 'umut freeze %s' first)", projectName, project.Status, projectName)
+		return fmt.Errorf("project %q is %s (use 'umu freeze %s' first)", projectName, project.Status, projectName)
 	}
 
 	fmt.Printf("  Resuming %s (%d services)\n", projectName, len(project.Services))

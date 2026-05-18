@@ -6,14 +6,14 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/compute"
-	"github.com/umuttalha/umut/internal/config"
-	"github.com/umuttalha/umut/internal/metadata"
-	"github.com/umuttalha/umut/internal/network"
-	proj "github.com/umuttalha/umut/internal/project"
-	"github.com/umuttalha/umut/internal/s3"
-	"github.com/umuttalha/umut/internal/state"
-	"github.com/umuttalha/umut/internal/storage"
+	"github.com/umuttalha/umu/internal/compute"
+	"github.com/umuttalha/umu/internal/config"
+	"github.com/umuttalha/umu/internal/metadata"
+	"github.com/umuttalha/umu/internal/network"
+	proj "github.com/umuttalha/umu/internal/project"
+	"github.com/umuttalha/umu/internal/s3"
+	"github.com/umuttalha/umu/internal/state"
+	"github.com/umuttalha/umu/internal/storage"
 )
 
 var loadCPUs int
@@ -27,8 +27,8 @@ The original VM config (CPUs, memory) is restored from metadata stored alongside
 the disk. You can override with --cpus and --memory.
 
 Examples:
-  umut load myserver
-  umut load myserver --cpus 4 --memory 8192`,
+  umu load myserver
+  umu load myserver --cpus 4 --memory 8192`,
 	Args: cobra.ExactArgs(1),
 	RunE: runLoad,
 }
@@ -52,7 +52,7 @@ func runLoad(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	if cfg.Storage.Provider != "s3" {
-		return fmt.Errorf("S3 storage not configured in ~/.umut/umut.toml")
+		return fmt.Errorf("S3 storage not configured in ~/.umu/umu.toml")
 	}
 
 	s3Client, err := s3.New(

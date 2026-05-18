@@ -1,6 +1,6 @@
 # Binaries
-umut
-umut-init
+umu
+umu-init
 dns-local
 *.exe
 
@@ -31,12 +31,12 @@ cmd-test
 scaletozero-test
 
 # Cross-compiled binaries
-umut-linux
-umut-linux-amd64
-umut-init-linux
-umut-init-linux-amd64
+umu-linux
+umu-linux-amd64
+umu-init-linux
+umu-init-linux-amd64
 
 # Test artifacts
 e2e_test.sh
 
-umut.toml
+umu.toml

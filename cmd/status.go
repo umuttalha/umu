@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	proj "github.com/umuttalha/umut/internal/project"
-	"github.com/umuttalha/umut/internal/state"
+	proj "github.com/umuttalha/umu/internal/project"
+	"github.com/umuttalha/umu/internal/state"
 )
 
 var statusCmd = &cobra.Command{
@@ -16,7 +16,7 @@ var statusCmd = &cobra.Command{
 including its VM configuration, network info, and uptime.
 
 Example:
-  umut status myproject`,
+  umu status myproject`,
 	Args: cobra.ExactArgs(1),
 	RunE: runStatus,
 }
@@ -42,7 +42,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Project:  %s\n", projectName)
 		fmt.Printf("  Status:   not found\n")
 		fmt.Println()
-		fmt.Printf("  Run 'umut deploy %s' to create this project.\n", projectName)
+		fmt.Printf("  Run 'umu deploy %s' to create this project.\n", projectName)
 		return nil
 	}
 

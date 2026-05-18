@@ -1,8 +1,8 @@
-# umut.toml — infrastructure config for umut
-# Copy to ~/.umut/umut.toml and fill in your credentials.
+# umu.toml — infrastructure config for umu
+# Copy to ~/.umu/umu.toml and fill in your credentials.
 # All fields are optional. Features activate when credentials are present.
 
-# ── S3 Storage (for umut push / umut load) ──────────────────────────
+# ── S3 Storage (for umu push / umu load) ──────────────────────────
 # Supported providers: AWS S3, Cloudflare R2, Backblaze B2, MinIO, any S3-compatible.
 # Leave empty to disable S3 push/load.
 
@@ -79,7 +79,7 @@ provider = "cloudflare"                                  # always "cloudflare"
 # zone_id = "xxx"
 
 # ── Global IPv6 prefix (optional — for public VM IPs) ──────────────────
-# Set via environment variable UMUT_GLOBAL_PREFIX6, not in this file.
-# Add to /etc/systemd/system/umut.service:
-#   Environment=UMUT_GLOBAL_PREFIX6=2001:db8:abcd
+# Set via environment variable UMU_GLOBAL_PREFIX6, not in this file.
+# Add to /etc/systemd/system/umu.service:
+#   Environment=UMU_GLOBAL_PREFIX6=2001:db8:abcd
 # This is your server's routed /64 prefix. VMs get public IPv6 from this.

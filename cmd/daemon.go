@@ -7,12 +7,12 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/metadata"
+	"github.com/umuttalha/umu/internal/metadata"
 )
 
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
-	Short: "Start the umut daemon (metadata service)",
+	Short: "Start the umu daemon (metadata service)",
 	Long: `Daemon runs the metadata HTTP service for VMs.
 
 This should be run as a systemd service or background process on the host.`,
@@ -24,7 +24,7 @@ func init() {
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
-	fmt.Println("  umut daemon starting...")
+	fmt.Println("  umu daemon starting...")
 
 	metadata.EnsureRunning()
 

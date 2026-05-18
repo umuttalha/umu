@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/umuttalha/umut/internal/metrics"
-	"github.com/umuttalha/umut/internal/state"
+	"github.com/umuttalha/umu/internal/metrics"
+	"github.com/umuttalha/umu/internal/state"
 )
 
 func TestBuildServiceInfos(t *testing.T) {

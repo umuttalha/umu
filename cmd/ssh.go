@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	proj "github.com/umuttalha/umut/internal/project"
-	"github.com/umuttalha/umut/internal/state"
+	proj "github.com/umuttalha/umu/internal/project"
+	"github.com/umuttalha/umu/internal/state"
 )
 
 var (
@@ -25,9 +25,9 @@ The VM must have dropbear installed and running on port 22. This is set up
 automatically at deploy time (Option B in SSH-EXEC.md).
 
 Examples:
-  umut ssh myserver
-  umut ssh myserver -u root
-  umut ssh myserver -i ~/.ssh/my_key`,
+  umu ssh myserver
+  umu ssh myserver -u root
+  umu ssh myserver -i ~/.ssh/my_key`,
 	Args: cobra.ExactArgs(1),
 	RunE: runSSH,
 }

@@ -11,7 +11,7 @@ import (
 // VM rootfs. The static binary avoids glibc version mismatches between the
 // host (Ubuntu 24.04, glibc 2.38) and guest (Ubuntu 22.04, glibc 2.35).
 func InjectDropbearSources(diskPath string) error {
-	mountDir, err := os.MkdirTemp("", "umut-ssh-")
+	mountDir, err := os.MkdirTemp("", "umu-ssh-")
 	if err != nil {
 		return err
 	}
@@ -49,7 +49,7 @@ func InjectDropbearSources(diskPath string) error {
 // The key is generated on the host using the host's dropbearkey binary,
 // then copied into the mounted VM rootfs.
 func GenerateDropbearHostKey(diskPath string) error {
-	mountDir, err := os.MkdirTemp("", "umut-sshkey-")
+	mountDir, err := os.MkdirTemp("", "umu-sshkey-")
 	if err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func GenerateDropbearHostKey(diskPath string) error {
 	}()
 
 	// Generate the host key on the host
-	tmpKey, err := os.CreateTemp("", "umut-dropbear-key-")
+	tmpKey, err := os.CreateTemp("", "umu-dropbear-key-")
 	if err != nil {
 		return fmt.Errorf("create temp key file: %w", err)
 	}
@@ -93,18 +93,18 @@ func GenerateDropbearHostKey(diskPath string) error {
 }
 
 // GenerateOrReuseDropbearHostKey generates a host key for the VM, reusing a
-// previously generated key if one exists in /var/lib/umut/ssh-keys/{project}/.
+// previously generated key if one exists in /var/lib/umu/ssh-keys/{project}/.
 func GenerateOrReuseDropbearHostKey(projectName, diskPath string) error {
-	dataDir := os.Getenv("UMUT_DATA_DIR")
+	dataDir := os.Getenv("UMU_DATA_DIR")
 	if dataDir == "" {
-		dataDir = "/var/lib/umut"
+		dataDir = "/var/lib/umu"
 	}
 	keyDir := filepath.Join(dataDir, "ssh-keys", projectName)
 	keyPath := filepath.Join(keyDir, "dropbear_ed25519_host_key")
 
 	// If a key already exists for this project, reuse it
 	if existingKey, err := os.ReadFile(keyPath); err == nil {
-		mountDir, err := os.MkdirTemp("", "umut-sshkey-")
+		mountDir, err := os.MkdirTemp("", "umu-sshkey-")
 		if err != nil {
 			return err
 		}
@@ -134,7 +134,7 @@ func GenerateOrReuseDropbearHostKey(projectName, diskPath string) error {
 	// Save the generated key for future reuse
 	os.MkdirAll(keyDir, 0700)
 
-	mountDir, err := os.MkdirTemp("", "umut-sshkey-save-")
+	mountDir, err := os.MkdirTemp("", "umu-sshkey-save-")
 	if err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func InjectAuthorizedKeys(diskPath string, pubKey string) error {
 		return nil
 	}
 
-	mountDir, err := os.MkdirTemp("", "umut-sshkeys-")
+	mountDir, err := os.MkdirTemp("", "umu-sshkeys-")
 	if err != nil {
 		return err
 	}

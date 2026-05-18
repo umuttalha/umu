@@ -1,6 +1,6 @@
 package main
 
-import "github.com/umuttalha/umut/cmd"
+import "github.com/umuttalha/umu/cmd"
 
 func main() {
 	cmd.Execute()

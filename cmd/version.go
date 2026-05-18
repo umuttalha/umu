@@ -16,10 +16,10 @@ var (
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the version of umut",
+	Short: "Print the version of umu",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("  umut %s\n", Version)
+		fmt.Printf("  umu %s\n", Version)
 		fmt.Printf("  commit:  %s\n", Commit)
 		fmt.Printf("  built:   %s\n", BuildDate)
 		fmt.Printf("  go:      %s\n", runtime.Version())

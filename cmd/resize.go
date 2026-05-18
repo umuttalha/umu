@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/umuttalha/umut/internal/compute"
-	"github.com/umuttalha/umut/internal/metadata"
-	"github.com/umuttalha/umut/internal/network"
-	proj "github.com/umuttalha/umut/internal/project"
-	"github.com/umuttalha/umut/internal/state"
-	"github.com/umuttalha/umut/internal/storage"
+	"github.com/umuttalha/umu/internal/compute"
+	"github.com/umuttalha/umu/internal/metadata"
+	"github.com/umuttalha/umu/internal/network"
+	proj "github.com/umuttalha/umu/internal/project"
+	"github.com/umuttalha/umu/internal/state"
+	"github.com/umuttalha/umu/internal/storage"
 )
 
 var (
@@ -31,9 +31,9 @@ The VM is briefly stopped, resized, and restarted automatically.
 Resources left at 0 keep their current value.
 
 Example:
-  umut resize myserver --disk 40
-  umut resize myserver --cpus 4 --memory 2048
-  umut resize myserver --disk 40 --cpus 2 --memory 1024`,
+  umu resize myserver --disk 40
+  umu resize myserver --cpus 4 --memory 2048
+  umu resize myserver --disk 40 --cpus 2 --memory 1024`,
 	Args: cobra.ExactArgs(1),
 	RunE: runResize,
 }

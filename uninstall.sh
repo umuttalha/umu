@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────
-# umut — clean uninstaller
+# umu — clean uninstaller
 # Removes everything install.sh created.
 # Safe to run multiple times.
 # Usage: bash uninstall.sh
@@ -19,7 +19,7 @@ warn()    { echo -e "  ${YELLOW}●${NC} $1"; }
 [[ $EUID -ne 0 ]] && { echo "Run as root"; exit 1; }
 
 echo ""
-echo "  umut uninstaller"
+echo "  umu uninstaller"
 echo "  ────────────────"
 echo ""
 
@@ -56,21 +56,21 @@ info "Flushing iptables NAT rules..."
 iptables -t nat -F POSTROUTING 2>/dev/null || true
 iptables -F FORWARD 2>/dev/null || true
 
-# ── Remove umut data ──────────────────────────
+# ── Remove umu data ──────────────────────────
 
-if [[ -d /var/lib/umut ]]; then
-    info "Removing /var/lib/umut (images, state, sockets)..."
-    rm -rf /var/lib/umut
+if [[ -d /var/lib/umu ]]; then
+    info "Removing /var/lib/umu (images, state, sockets)..."
+    rm -rf /var/lib/umu
     info "Data removed"
 else
-    info "No umut data directory found"
+    info "No umu data directory found"
 fi
 
-# ── Remove umut binary ────────────────────────
+# ── Remove umu binary ────────────────────────
 
-if [[ -f /usr/local/bin/umut ]]; then
-    rm -f /usr/local/bin/umut
-    info "Removed /usr/local/bin/umut"
+if [[ -f /usr/local/bin/umu ]]; then
+    rm -f /usr/local/bin/umu
+    info "Removed /usr/local/bin/umu"
 fi
 
 # ── Remove Firecracker binary ─────────────────
@@ -94,25 +94,25 @@ if [[ -d /srv/jailer ]]; then
     info "Removed /srv/jailer"
 fi
 
-# ── Remove umut user and group ─────────────────
+# ── Remove umu user and group ─────────────────
 
-if id umut &> /dev/null; then
-    userdel umut 2>/dev/null || true
-    info "Removed umut user"
+if id umu &> /dev/null; then
+    userdel umu 2>/dev/null || true
+    info "Removed umu user"
 fi
 
-if getent group umut &> /dev/null; then
-    groupdel umut 2>/dev/null || true
-    info "Removed umut group"
+if getent group umu &> /dev/null; then
+    groupdel umu 2>/dev/null || true
+    info "Removed umu group"
 fi
 
 # ── Clean up cgroups ──────────────────────────
 
-if [[ -d /sys/fs/cgroup/umut ]]; then
-    find /sys/fs/cgroup/umut -type d | sort -r | while read -r d; do
+if [[ -d /sys/fs/cgroup/umu ]]; then
+    find /sys/fs/cgroup/umu -type d | sort -r | while read -r d; do
         rmdir "$d" 2>/dev/null || true
     done
-    info "Cleaned up umut cgroups"
+    info "Cleaned up umu cgroups"
 fi
 
 # ── Stop and remove Caddy ─────────────────────
@@ -133,7 +133,7 @@ fi
 
 # ── Remove sysctl config ──────────────────────
 
-rm -f /etc/sysctl.d/99-umut.conf
+rm -f /etc/sysctl.d/99-umu.conf
 sysctl -w net.ipv4.ip_forward=0 > /dev/null 2>&1 || true
 
 # ── Done ──────────────────────────────────────
