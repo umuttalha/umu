@@ -48,6 +48,11 @@ DEBIAN_FRONTEND=noninteractive chroot "$ROOTFS" apt-get update
 DEBIAN_FRONTEND=noninteractive chroot "$ROOTFS" apt-get install -y -qq --no-install-recommends $PACKAGES
 DEBIAN_FRONTEND=noninteractive chroot "$ROOTFS" apt-get clean
 
+# Persist noninteractive apt so config file prompts never hang inside VMs
+cat > "$ROOTFS/etc/apt/apt.conf.d/99noninteractive" <<'APTEOF'
+DPkg::Options {"--force-confdef"; "--force-confold";};
+APTEOF
+
 # Clean up the policy-rc.d override
 rm -f "$ROOTFS/usr/sbin/policy-rc.d"
 

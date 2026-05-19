@@ -56,6 +56,11 @@ func EnsureSharedBridge() {
 		// Allow external SSH to VMs via global IPv6 (direct access without bare metal hop)
 		run("ip6tables", "-A", "FORWARD", "-d", compute.CNIGlobalPrefix6+"::/64", "-p", "tcp", "--dport", "22", "-j", "ACCEPT")
 		run("ip6tables", "-A", "FORWARD", "-d", compute.CNIGlobalPrefix6+"::/64", "-p", "tcp", "--dport", "9999", "-j", "ACCEPT")
+		// Allow external HTTP/HTTPS to VMs via global IPv6 (Cloudflare → VM direct)
+		run("ip6tables", "-A", "FORWARD", "-d", compute.CNIGlobalPrefix6+"::/64", "-p", "tcp", "--dport", "80", "-j", "ACCEPT")
+		run("ip6tables", "-A", "FORWARD", "-d", compute.CNIGlobalPrefix6+"::/64", "-p", "tcp", "--dport", "443", "-j", "ACCEPT")
+		// Drop all other inbound traffic to VM global IPv6 (only SSH, agent, HTTP, HTTPS allowed)
+		run("ip6tables", "-A", "FORWARD", "-d", compute.CNIGlobalPrefix6+"::/64", "-j", "DROP")
 		// INPUT chain: block VM→host traffic except metadata service + ICMPv6 + established
 		run("ip6tables", "-I", "INPUT", "1", "-i", SharedBridge, "-p", "icmpv6", "-j", "ACCEPT")
 		run("ip6tables", "-I", "INPUT", "2", "-i", SharedBridge, "-p", "tcp", "-d", compute.CNIGateway, "--dport", "9071", "-j", "ACCEPT")

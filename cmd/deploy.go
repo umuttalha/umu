@@ -18,12 +18,13 @@ import (
 )
 
 var (
-	deployCPUs    int
-	deployMemory  int
-	deployDisk    int
-	deployPort    int
-	deploySSHKey  string
-	deployExpose  bool
+	deployCPUs   int
+	deployMemory int
+	deployDisk   int
+	deployPort   int
+	deploySSHKey string
+	deployExpose bool
+	deployDomain string
 )
 
 var deployCmd = &cobra.Command{
@@ -46,6 +47,7 @@ func init() {
 	deployCmd.Flags().IntVar(&deployPort, "port", 0, "target port inside the VM for HTTP routing (0 = no routing)")
 	deployCmd.Flags().StringVar(&deploySSHKey, "ssh-key", "", "path to SSH public key for VM access")
 	deployCmd.Flags().BoolVar(&deployExpose, "expose", false, "expose the VM via Caddy reverse proxy")
+	deployCmd.Flags().StringVar(&deployDomain, "domain", "", "custom domain for the Caddy route (default: <project>.example.com)")
 	rootCmd.AddCommand(deployCmd)
 }
 
@@ -219,7 +221,12 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if svcState.Expose && deployPort > 0 {
 		fmt.Printf("  ● Configuring proxy...")
 		cfg, _ := config.Load()
-		routeHostname := proj.RouteHostname(proj.FQDN(projectName, cfg.DNS.BaseDomain), "main")
+		var routeHostname string
+		if deployDomain != "" {
+			routeHostname = deployDomain
+		} else {
+			routeHostname = proj.RouteHostname(proj.FQDN(projectName, cfg.DNS.BaseDomain), "main")
+		}
 		if err := routing.AddRoute(routeHostname, svcState.GuestIP, deployPort); err != nil {
 			fmt.Printf(" warning: caddy route failed: %v\n", err)
 		} else {
