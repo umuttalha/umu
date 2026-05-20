@@ -2,12 +2,27 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/umuttalha/umu/internal/config"
+	proj "github.com/umuttalha/umu/internal/project"
 	"github.com/umuttalha/umu/internal/routing"
 	"github.com/umuttalha/umu/internal/state"
 )
+
+func hostGlobalIPv6() string {
+	prefix := os.Getenv("UMU_GLOBAL_PREFIX6")
+	if prefix == "" {
+		return ""
+	}
+	return prefix + "::2"
+}
+
+func fqdnDomain(cfg *config.Config, name string) string {
+	return proj.FQDN(name, cfg.DNS.BaseDomain)
+}
 
 var (
 	routePort    int
@@ -30,10 +45,19 @@ Examples:
 }
 
 var routeAddCmd = &cobra.Command{
-	Use:   "add <project-name> <domain>",
-	Short: "Add or update a route from a domain to a VM service",
-	Args:  cobra.ExactArgs(2),
-	RunE:  runRouteAdd,
+	Use:   "add <project-name> [domain]",
+	Short: "Add a Caddy reverse-proxy route to a VM",
+	Long: `Add a Caddy route that maps a domain or subdomain to a port inside the VM.
+
+When domain is omitted, the project's FQDN on the base domain is used
+(e.g. "benimlisem-dev" → "benimlisem-dev.umut.space").
+
+Examples:
+  umu route add benimlisem-dev --port 3000        # auto: benimlisem-dev.umut.space
+  umu route add benimlisem benimlisem.com --port 8080
+  umu route add myapp api.example.com --port 3000 --tls --cert cert.pem --key key.pem`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: runRouteAdd,
 }
 
 var routeRemoveCmd = &cobra.Command{
@@ -63,7 +87,17 @@ func init() {
 
 func runRouteAdd(cmd *cobra.Command, args []string) error {
 	projectName := args[0]
-	domain := args[1]
+
+	var domain string
+	if len(args) >= 2 {
+		domain = args[1]
+	} else {
+		cfg, _ := config.Load()
+		domain = proj.FQDN(projectName, cfg.DNS.BaseDomain)
+		if domain == projectName {
+			return fmt.Errorf("no domain provided and no DNS base domain configured — specify a domain")
+		}
+	}
 
 	store, err := state.NewStore()
 	if err != nil {
@@ -84,6 +118,23 @@ func runRouteAdd(cmd *cobra.Command, args []string) error {
 		vmIP = svc.IP
 	}
 
+	// DNS: point the domain to the host so Caddy can intercept web traffic.
+	// For custom domains the user manages their own DNS; for auto-generated
+	// FQDNs we update the existing AAAA record to point to the host IP.
+	cfg, _ := config.Load()
+	isAutoFQDN := (len(args) < 2) || domain == fqdnDomain(cfg, projectName)
+	if isAutoFQDN && dnsConfigured(cfg) {
+		hostIP := hostGlobalIPv6()
+		if hostIP != "" {
+			dnsClient := newDNSClient(cfg)
+			if dnsClient != nil {
+				if err := dnsClient.Setup(domain, hostIP); err != nil {
+					fmt.Printf("  warning: DNS update for %s → %s failed: %v\n", domain, hostIP, err)
+				}
+			}
+		}
+	}
+
 	fmt.Printf("  ● Routing %s → %s:%d", domain, vmIP, routePort)
 
 	if routeTLS {
@@ -101,11 +152,12 @@ func runRouteAdd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Save domain to project state
+	svc.Expose = true
 	svc.Domain = domain
+	svc.ServicePort = routePort
 	project.Status = state.StatusRunning
 	if err := store.Save(project); err != nil {
-		fmt.Printf(" warning: save domain to state: %v\n", err)
+		fmt.Printf(" warning: save state: %v\n", err)
 	}
 
 	fmt.Printf(" done\n")
@@ -123,13 +175,26 @@ func runRouteRemove(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("  ● Removing route %s...", domain)
 
-	// Clear domain from any project that has it
+	// Clear domain/Expose from any project that has it, and restore DNS
 	projects := store.List()
 	for _, p := range projects {
 		for _, svc := range p.Services {
 			if svc.Domain == domain {
 				svc.Domain = ""
+				svc.Expose = false
+				svc.ServicePort = 0
 				store.Save(p)
+
+				// Restore DNS AAAA back to VM's global IP so SSH via hostname works
+				cfg, _ := config.Load()
+				if dnsConfigured(cfg) && svc.GlobalIP != "" {
+					if domain == fqdnDomain(cfg, p.Name) {
+						dnsClient := newDNSClient(cfg)
+						if dnsClient != nil {
+							dnsClient.Setup(domain, svc.GlobalIP)
+						}
+					}
+				}
 				break
 			}
 		}

@@ -117,7 +117,7 @@ func runLoad(cmd *cobra.Command, args []string) error {
 	guestIPv4 := network.AllocateGuestIPv4(projectIndex)
 	globalIP := network.AllocateGuestGlobalIP(projectIndex)
 	mac := network.GenerateMAC(projectIndex, 0)
-	tapName := network.TapName(projectName, "main", 0)
+	tapName := network.AllocateTapName(projectIndex, "main")
 
 	fmt.Printf("  ● Setting up network...")
 	network.DestroyTAP(tapName)

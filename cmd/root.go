@@ -21,10 +21,14 @@ dedicated IPv6, and SSH access.
   umu htop                 Live CPU/memory per VM
   umu status myserver      View VM details (IPs, PID, disk)
   umu logs myserver        Tail VM console logs
+  umu route add myserver --port 3000    Expose VM on myserver.umut.space
+  umu route add myserver example.com --port 8080
+  umu clone src dst        Duplicate a VM locally (branch from known-good state)
   umu freeze myserver      Snapshot memory → stop VM
   umu unfreeze myserver    Restore from snapshot
   umu push myserver        Archive VM disk to S3
   umu load myserver        Restore VM from S3
+  umu unexpose myserver    Remove Caddy route (keep VM + DNS)
   umu destroy myserver     Tear down a VM`,
 	SilenceUsage:  true,
 	SilenceErrors: true,

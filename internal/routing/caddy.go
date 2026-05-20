@@ -36,8 +36,8 @@ type RouteInfo struct {
 	Domain  string
 }
 
-// EnsureServer makes sure the Caddy HTTP server config exists for umu
-// and listens on both :80 and :443.
+// EnsureServer makes sure the Caddy HTTP server config exists for umu,
+// listens on both :80 and :443, and has automatic HTTPS enabled.
 func EnsureServer() error {
 	// Check if the server already exists.
 	resp, err := http.Get(CaddyAdminAPI + "/config/apps/http/servers/umu")
@@ -48,8 +48,10 @@ func EnsureServer() error {
 	resp.Body.Close()
 
 	if resp.StatusCode == 200 && string(body) != "null" && len(body) > 2 {
-		// Server exists — ensure it listens on :80 and :443
-		return patchServerListen()
+		if err := patchServerListen(); err != nil {
+			return err
+		}
+		return ensureAutoHTTPS()
 	}
 
 	serverCfg := map[string]interface{}{
@@ -79,7 +81,7 @@ func EnsureServer() error {
 		return fmt.Errorf("caddy seed config error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	return nil
+	return ensureAutoHTTPS()
 }
 
 // patchServerListen ensures the existing umu server listens on :80 and :443.
@@ -99,6 +101,29 @@ func patchServerListen() error {
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("caddy listen patch error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// ensureAutoHTTPS enables Caddy's automatic HTTPS on the umu server:
+// TLS certificates via Let's Encrypt and HTTP→HTTPS redirects.
+// Idempotent — safe to call on every route add.
+func ensureAutoHTTPS() error {
+	url := CaddyAdminAPI + "/config/apps/http/servers/umu/auto_https"
+	body := bytes.NewReader([]byte(`{"disable_redirects":false}`))
+	req, err := http.NewRequest(http.MethodPatch, url, body)
+	if err != nil {
+		return fmt.Errorf("create auto_https patch: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("caddy auto_https patch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("caddy auto_https error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 	return nil
 }

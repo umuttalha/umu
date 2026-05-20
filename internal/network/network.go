@@ -255,6 +255,18 @@ func run(name string, args ...string) error {
 	return nil
 }
 
+// AllocateTapName generates a guaranteed-unique TAP interface name (max 15 chars)
+// using the project's SQLite row index. Unlike TapName, this avoids collisions between
+// projects whose truncated names are identical (e.g. "benimlisem" and "benimlisem-dev"
+// both truncate to "tap-beniml-main").
+func AllocateTapName(index int, serviceName string) string {
+	svc := serviceName
+	if len(svc) > 7 {
+		svc = svc[:7]
+	}
+	return fmt.Sprintf("tap-u%03d-%s", index, svc)
+}
+
 // TapName generates a Linux-compatible TAP interface name (max 15 chars).
 // Linux IFNAMSIZ is 16 (including null), so the name must be <= 15.
 // The "tap-" prefix uses 4 chars, leaving 11 for project-service.
