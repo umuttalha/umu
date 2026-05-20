@@ -30,6 +30,12 @@ type Route struct {
 	TLS         *TLSConfig
 }
 
+// RouteInfo holds domain and project for a single route, used in list display.
+type RouteInfo struct {
+	Project string
+	Domain  string
+}
+
 // EnsureServer makes sure the Caddy HTTP server config exists for umu
 // and listens on both :80 and :443.
 func EnsureServer() error {
@@ -97,14 +103,14 @@ func patchServerListen() error {
 	return nil
 }
 
-// AddRoute configures Caddy to route traffic for a project's FQDN to its VM.
-// Deletes any existing route with the same ID first to avoid duplicate route errors.
-func AddRoute(domain, vmIP string, port int) error {
+// AddRoute configures Caddy to route traffic for a domain to a project's VM.
+// Deletes any existing route with the same domain first.
+func AddRoute(projectName, domain, vmIP string, port int) error {
 	if err := EnsureServer(); err != nil {
 		return fmt.Errorf("ensure caddy server: %w", err)
 	}
 
-	RemoveRoute(domain)
+	removeByDomain(domain)
 
 	handle := map[string]interface{}{
 		"handler": "reverse_proxy",
@@ -146,8 +152,8 @@ func AddRoute(domain, vmIP string, port int) error {
 }
 
 // AddRouteTLS configures Caddy with TLS certificates for the route.
-func AddRouteTLS(domain, vmIP string, port int, tls *TLSConfig) error {
-	if err := AddRoute(domain, vmIP, port); err != nil {
+func AddRouteTLS(projectName, domain, vmIP string, port int, tls *TLSConfig) error {
+	if err := AddRoute(projectName, domain, vmIP, port); err != nil {
 		return err
 	}
 	return setRouteTLS(domain, tls)
@@ -228,9 +234,14 @@ func UpdateRoute(domain, newVMIP string, port int) error {
 	return nil
 }
 
-// RemoveRoute removes the Caddy route for a project.
-func RemoveRoute(projectName string) error {
-	url := CaddyAdminAPI + "/id/route-" + projectName
+// RemoveRoute removes the Caddy route for a domain.
+func RemoveRoute(domain string) error {
+	return removeByDomain(domain)
+}
+
+// removeByDomain deletes a route by its domain.
+func removeByDomain(domain string) error {
+	url := CaddyAdminAPI + "/id/route-" + domain
 
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
@@ -273,12 +284,49 @@ func ListRoutes() ([]Route, error) {
 	var routes []Route
 	for _, raw := range rawRoutes {
 		id, _ := raw["@id"].(string)
-		if len(id) > 6 && id[:6] == "route-" {
+
+		// Extract domain from match → host
+		domain := ""
+		if matchArr, ok := raw["match"].([]interface{}); ok && len(matchArr) > 0 {
+			if match, ok := matchArr[0].(map[string]interface{}); ok {
+				if hosts, ok := match["host"].([]interface{}); ok && len(hosts) > 0 {
+					domain, _ = hosts[0].(string)
+				}
+			}
+		}
+
+		// Fallback: derive domain from @id
+		if domain == "" && len(id) > 6 && id[:6] == "route-" {
+			domain = id[6:]
+		}
+
+		if domain != "" {
 			routes = append(routes, Route{
-				ProjectName: id[6:],
+				Domain: domain,
 			})
 		}
 	}
 
 	return routes, nil
+}
+
+// ProjectRoutes returns domain→project mapping for list display.
+// It resolves project names by looking up known domains in the project store.
+func ProjectRoutes(knownDomains map[string]string) ([]RouteInfo, error) {
+	routes, err := ListRoutes()
+	if err != nil {
+		return nil, err
+	}
+	var info []RouteInfo
+	for _, r := range routes {
+		proj := knownDomains[r.Domain]
+		if proj == "" {
+			proj = r.Domain
+		}
+		info = append(info, RouteInfo{
+			Project: proj,
+			Domain:  r.Domain,
+		})
+	}
+	return info, nil
 }

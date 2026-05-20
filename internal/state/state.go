@@ -78,6 +78,7 @@ type Service struct {
 	MACAddress   string   `json:"mac_address"`
 	KernelArgs   string   `json:"kernel_args,omitempty"`
 	ServicePort  int    `json:"service_port"`
+	Domain       string `json:"domain,omitempty"`
 }
 
 // Store manages persistent project state backed by SQLite.

@@ -227,7 +227,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		} else {
 			routeHostname = proj.RouteHostname(proj.FQDN(projectName, cfg.DNS.BaseDomain), "main")
 		}
-		if err := routing.AddRoute(routeHostname, svcState.GuestIP, deployPort); err != nil {
+		if err := routing.AddRoute(projectName, routeHostname, svcState.GuestIP, deployPort); err != nil {
 			fmt.Printf(" warning: caddy route failed: %v\n", err)
 		} else {
 			fmt.Printf(" exposed at %s\n", routeHostname)

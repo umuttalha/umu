@@ -225,7 +225,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 		if svc.Expose {
 			fmt.Printf("  ● Configuring proxy...")
 			routeHostname := proj.RouteHostname(projectName, svc.Name)
-			if err := routing.AddRoute(routeHostname, svc.GuestIP, svc.ServicePort); err != nil {
+			if err := routing.AddRoute(projectName, routeHostname, svc.GuestIP, svc.ServicePort); err != nil {
 				fmt.Printf(" warning: caddy route failed: %v\n", err)
 			}
 			fmt.Printf(" exposed at %s\n", routeHostname)

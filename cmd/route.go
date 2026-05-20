@@ -22,10 +22,10 @@ var routeCmd = &cobra.Command{
 	Long: `Manage Caddy reverse proxy routes that map domains to VM services.
 
 Examples:
-  umu route add plausible sub.example.com --port 8000
-  umu route add benimlisem example.com --port 8080
+  umu route add plausible cici.benimlisem.com --port 8000
+  umu route add benimlisem benimlisem.com --port 8080
   umu route add myapp myapp.example.com --port 3000 --tls --cert /etc/caddy/certs/myapp.pem --key /etc/caddy/certs/myapp-key.pem
-  umu route remove sub.benimlisem.com
+  umu route remove cici.benimlisem.com
   umu route list`,
 }
 
@@ -91,14 +91,21 @@ func runRouteAdd(cmd *cobra.Command, args []string) error {
 			CertFile: routeTLSCert,
 			KeyFile:  routeTLSKey,
 		}
-		if err := routing.AddRouteTLS(domain, vmIP, routePort, tls); err != nil {
+		if err := routing.AddRouteTLS(projectName, domain, vmIP, routePort, tls); err != nil {
 			return fmt.Errorf("add tls route: %w", err)
 		}
 		fmt.Printf(" [TLS]")
 	} else {
-		if err := routing.AddRoute(domain, vmIP, routePort); err != nil {
+		if err := routing.AddRoute(projectName, domain, vmIP, routePort); err != nil {
 			return fmt.Errorf("add route: %w", err)
 		}
+	}
+
+	// Save domain to project state
+	svc.Domain = domain
+	project.Status = state.StatusRunning
+	if err := store.Save(project); err != nil {
+		fmt.Printf(" warning: save domain to state: %v\n", err)
 	}
 
 	fmt.Printf(" done\n")
@@ -109,7 +116,25 @@ func runRouteAdd(cmd *cobra.Command, args []string) error {
 func runRouteRemove(cmd *cobra.Command, args []string) error {
 	domain := args[0]
 
+	store, err := state.NewStore()
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+
 	fmt.Printf("  ● Removing route %s...", domain)
+
+	// Clear domain from any project that has it
+	projects := store.List()
+	for _, p := range projects {
+		for _, svc := range p.Services {
+			if svc.Domain == domain {
+				svc.Domain = ""
+				store.Save(p)
+				break
+			}
+		}
+	}
+
 	if err := routing.RemoveRoute(domain); err != nil {
 		return fmt.Errorf("remove route: %w", err)
 	}
@@ -118,35 +143,39 @@ func runRouteRemove(cmd *cobra.Command, args []string) error {
 }
 
 func runRouteList(cmd *cobra.Command, args []string) error {
-	routes, err := routing.ListRoutes()
+	store, err := state.NewStore()
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+
+	// Build domain→project mapping from state
+	known := make(map[string]string)
+	for _, p := range store.List() {
+		for _, svc := range p.Services {
+			if svc.Domain != "" {
+				known[svc.Domain] = p.Name
+			}
+		}
+	}
+
+	info, err := routing.ProjectRoutes(known)
 	if err != nil {
 		return fmt.Errorf("list routes: %w", err)
 	}
 
-	if len(routes) == 0 {
+	if len(info) == 0 {
 		fmt.Println("  No routes configured")
 		return nil
-	}
-
-	store, err := state.NewStore()
-	if err != nil {
-		return fmt.Errorf("load state: %w", err)
 	}
 
 	fmt.Println()
 	fmt.Printf("  %-35s  %-15s\n", "DOMAIN", "PROJECT")
 	fmt.Printf("  %-35s  %-15s\n", strings.Repeat("─", 35), strings.Repeat("─", 15))
 
-	for _, r := range routes {
-		domain := r.ProjectName
-		proj, exists := store.Get(domain)
-		projectLabel := domain
-		if exists && proj != nil && len(proj.Services) > 0 {
-			projectLabel = proj.Name
-		}
-		fmt.Printf("  %-35s  %-15s\n", domain, projectLabel)
+	for _, ri := range info {
+		fmt.Printf("  %-35s  %-15s\n", ri.Domain, ri.Project)
 	}
 
-	fmt.Printf("\n  %d route(s) configured\n", len(routes))
+	fmt.Printf("\n  %d route(s) configured\n", len(info))
 	return nil
 }

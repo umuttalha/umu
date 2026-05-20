@@ -45,7 +45,9 @@ func runList(cmd *cobra.Command, args []string) error {
 			}
 
 			url := "-"
-			if svc.Expose {
+			if svc.Domain != "" {
+				url = svc.Domain
+			} else if svc.Expose {
 				if svc.Name == "main" {
 					url = p.Name
 				} else {
