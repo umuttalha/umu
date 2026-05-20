@@ -4,7 +4,7 @@
 
 ```
 umu deploy myserver --cpus 2 --memory 4096 --disk 20
-ssh root@<global-ipv6>
+ssh root@myserver.example.com
 ```
 
 ## What It Does
@@ -14,12 +14,15 @@ Turns a single bare-metal server into your own VM platform. Each `umu deploy` cr
 - **Full Ubuntu 24.04** — `apt install` anything, 134 packages pre-installed
 - **Writable rootfs** — every VM gets its own cloned disk, resizable to any size
 - **Dual IPv6** — ULA for internal, global `/64` for external SSH/HTTP
-- **SSH access** — static Dropbear with ED25519 host keys per VM
+- **SSH via hostname** — auto-created DNS AAAA record (`{name}.example.com`)
+- **Web routing** — expose any VM port with `umu route add`, Caddy handles TLS
 - **Freeze/unfreeze** — snapshot memory to disk, restore in ~100ms
+- **Clone** — duplicate a VM locally, like `git clone` for VMs
+- **S3 archival** — push/load VM disks to R2, B2, or AWS S3
 - **Cgroups v2** — CPU, memory, I/O limits per VM
 - **Resizable disks** — grow VM disk online with `umu resize`
 
-**No Docker. No Kubernetes. No serverless.** Just Go + Firecracker.
+No Docker. No Kubernetes. No serverless.
 
 ## Quick Start
 
@@ -33,10 +36,10 @@ apt install -y debootstrap dropbear-bin e2fsprogs
 # Deploy a VM
 umu deploy myserver --cpus 2 --memory 4096 --disk 20
 
-# SSH in
-ssh root@<global-ipv6>
+# SSH via hostname (auto-created DNS AAAA record)
+ssh root@myserver.example.com
 
-# Or use the helper
+# Or via the helper
 umu ssh myserver
 ```
 
@@ -50,11 +53,18 @@ umu ssh myserver
 | `umu ssh <name>` | Interactive SSH into a VM |
 | `umu exec <name> <cmd>` | Run a command inside a VM |
 | `umu logs <name>` | Tail VM console logs |
+| `umu htop` | Live CPU/memory per VM |
 | `umu freeze <name>` | Snapshot memory → stop VM |
 | `umu unfreeze <name>` | Restore from snapshot (~100ms) |
-| `umu resize <name> --disk <GB>` | Grow VM disk, auto restart |
+| `umu clone <src> <dst>` | Duplicate a VM locally |
+| `umu resize <name> --disk <N>` | Grow VM disk and restart |
 | `umu push <name>` | Archive VM disk to S3 |
 | `umu load <name>` | Restore VM from S3 |
+| `umu route add <name> --port <N>` | Expose VM on `{name}.example.com` |
+| `umu route add <name> <domain> --port <N>` | Expose VM on custom domain |
+| `umu route list` | List all HTTP routes |
+| `umu route remove <domain>` | Remove one HTTP route |
+| `umu unexpose <name>` | Remove Caddy route, keep VM |
 | `umu destroy <name>` | Tear down and release resources |
 
 ### Deploy Flags
@@ -65,8 +75,51 @@ umu ssh myserver
 | `--memory` | `256` | Memory in MB |
 | `--disk` | `10` | Disk size in GB |
 | `--ssh-key` | auto | Path to SSH public key |
-| `--port` | `0` | HTTP port for Caddy routing (0 = disabled) |
+| `--port` | `0` | HTTP port for Caddy routing |
 | `--expose` | `false` | Expose VM via Caddy reverse proxy |
+| `--domain` | — | Custom domain for the route |
+
+### Clone Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--cpus` | inherit | Override vCPUs |
+| `--memory` | inherit | Override memory in MB |
+| `--domain` | — | Custom domain for the clone |
+| `--expose` | `false` | Expose via Caddy |
+| `--port` | `0` | HTTP port for Caddy routing |
+
+## Common Workflows
+
+### Deploy and expose a web server
+
+```bash
+umu deploy myapp --cpus 2 --memory 4096 --disk 20
+# Inside the VM: start your app on port 8080
+umu route add myapp --port 8080
+# App is now at https://myapp.example.com (TLS via Caddy)
+```
+
+### Dev branch (clone from production)
+
+```bash
+umu freeze prod
+umu clone prod staging --expose --port 3000
+# staging.example.com → TLS → VM:3000
+# ... test ...
+umu unexpose staging     # shut off web, SSH still works
+umu destroy staging --force
+umu unfreeze prod
+```
+
+### Archive and restore
+
+```bash
+umu freeze myserver
+umu push myserver        # gzip + upload to S3
+# ... later, on same or different server ...
+umu load myserver        # download + decompress + deploy
+```
 
 ## IPv6 Addressing
 
@@ -74,13 +127,56 @@ umu ssh myserver
 Your /64: 2001:db8:abcd::/64
   Host (enp5s0):   2001:db8:abcd::2
   Bridge (br-umu): fd00:172:26::1/64
-  VM 0:             2001:db8:abcd::3   +   fd00:172:26::2
-  VM 1:             2001:db8:abcd::4   +   fd00:172:26::12
-  VM N:             2001:db8:abcd::{3+N}  +  fd00:172:26::{N*10+2}
+
+  VM 0:  2001:db8:abcd::3   +   fd00:172:26::2     172.26.0.2
+  VM 1:  2001:db8:abcd::4   +   fd00:172:26::12    172.26.1.2
+  VM N:  2001:db8:abcd::{3+N}  +  fd00:172:26::{N*10+2}  172.26.{N}.2
 ```
 
 One VM = one project. Each VM gets a dedicated global IPv6 for direct SSH access.
 Set `UMU_GLOBAL_PREFIX6` env var to your server's routed /64 prefix (e.g. `2001:db8:abcd`).
+
+## DNS & Web Routing
+
+### Auto-DNS (SSH hostname)
+
+Every deploy and clone auto-creates a Cloudflare AAAA record pointing to the VM's global IPv6:
+
+```bash
+umu deploy myserver
+ssh root@myserver.example.com  # resolves automatically
+```
+
+Requires `[dns]` section in `~/.umu/umu.toml`:
+```toml
+[dns]
+provider = "cloudflare"
+api_token = "<your-api-token>"
+zone_id = "<your-zone-id>"
+```
+
+### Web Routing via Caddy
+
+`umu route add` flips the DNS to point to the **host** instead of the VM, so Caddy can intercept and proxy traffic with automatic TLS:
+
+```bash
+umu route add myserver --port 8080
+# DNS: myserver.example.com → HOST IP
+# Caddy: myserver.example.com → VM fd00:172:26::X:8080
+# Browser: https://myserver.example.com (auto TLS + HTTP→HTTPS redirect)
+```
+
+`umu unexpose` flips DNS back to the VM's IP so SSH via hostname works again.
+
+### Custom Domains
+
+For domains like `myapp.com`, add an AAAA record in your DNS provider pointing to the host's IPv6, then:
+
+```bash
+umu route add myapp myapp.com --port 3000
+```
+
+Caddy matches the Host header and proxies to the VM. TLS is automatic via Let's Encrypt.
 
 ## Disk Layout
 
@@ -89,19 +185,19 @@ ubuntu-base.ext4 (152MB, sparse)
     → cloned to myserver.ext4
     → resized to --disk N GB
     → injected with:
-        /sbin/init       umu-init (PID 1, sets up network + services)
-        /usr/sbin/dropbear   static Dropbear SSH server
+        /sbin/init            umu-init (PID 1, sets up network + services)
+        /usr/sbin/dropbear    static Dropbear SSH server
         /etc/dropbear/        ED25519 host key (persistent per-VM)
         /root/.ssh/           authorized_keys (injected at deploy)
         /usr/bin/             apt, bash, curl, wget, python3, etc.
 ```
 
-## Filesystem Layout (Server)
+## Server Filesystem Layout
 
 ```
 /usr/local/bin/
-  umu              CLI binary
-  umu-init         Guest init (PID 1 inside VM)
+  umu               CLI binary
+  umu-init          Guest init (PID 1 inside VM)
   firecracker       Firecracker VMM
   dropbear-static   Statically compiled Dropbear
 
@@ -122,7 +218,8 @@ ubuntu-base.ext4 (152MB, sparse)
 
 - Ubuntu 24.04 LTS (bare metal)
 - Firecracker v1.10+
-- Caddy (for HTTP routing, optional)
+- Caddy (for HTTP routing + TLS)
+- Cloudflare account (for DNS and TLS)
 - debootstrap (for building base image)
 
 ## Build
@@ -138,45 +235,40 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o umu-init ./cm
 umu deploy myserver --cpus 2 --memory 4096 --disk 20
     ├─ 1. Clone ubuntu-base.ext4 → myserver.ext4
     ├─ 2. Resize disk to 20GB
-    ├─ 3. Inject umu-init, static dropbear, SSH host key, authorized_keys
-    ├─ 4. Create TAP interface, attach to br-umu bridge
+    ├─ 3. Inject umu-init, dropbear, SSH host key, authorized_keys
+    ├─ 4. Allocate global + ULA IPv6, create TAP on br-umu bridge
     ├─ 5. Start Firecracker microVM inside jailer (chroot + seccomp)
     ├─ 6. Setup NDP proxy for global IPv6 access
-    ├─ 7. Auto-create Cloudflare DNS AAAA record (if project name includes domain)
+    ├─ 7. Auto-create Cloudflare DNS AAAA record ({name}.example.com → VM IP)
     └─ 8. Optionally add Caddy route (--port + --expose)
 
-State: SQLite (state.db) — tracks VMs, IPs, PIDs
+umu route add myserver --port 8080
+    ├─ 1. Flip DNS AAAA → host IP (so Caddy intercepts)
+    ├─ 2. Add Caddy reverse_proxy route (domain → VM:8080)
+    └─ 3. Caddy auto_https issues TLS cert, redirects HTTP→HTTPS
+
+State: SQLite (state.db) — tracks VMs, IPs, PIDs, domains
 Config: ~/.umu/umu.toml — S3 credentials + Cloudflare DNS API token
 ```
 
-## DNS & Custom Domains
+## Config File
 
-### Auto-DNS (umut.space subdomains)
+```toml
+# ~/.umu/umu.toml
 
-Deploy with a full domain name and umu auto-creates the AAAA record:
+[storage]
+provider = "s3"
+endpoint = "https://s3.amazonaws.com"
+bucket = "umu-backups"
+access_key = "xxx"
+secret_key = "xxx"
+region = "us-east-1"
 
-```bash
-umu deploy cici.umut.space --cpus 2 --memory 4096
-ssh root@cici.umut.space  # resolves automatically
+[dns]
+provider = "cloudflare"
+api_token = "xxx"
+zone_id = "xxx"
 ```
-
-Requires `[dns]` section in `~/.umu/umu.toml` with Cloudflare API token + zone ID.
-
-### Custom Domains
-
-Deploy a VM, grab its global IPv6 from `umu list`, then add an AAAA record in Cloudflare pointing to that IP:
-
-```bash
-umu deploy myapp
-umu list            # → global IP: 2111:411:111:daa::2
-```
-
-In Cloudflare DNS, add:
-| Type | Name | Content |
-|------|------|---------|
-| AAAA | `app.example.com` | `2111:411:111:daa::2` |
-
-Traffic goes directly to the VM. Run your reverse proxy (nginx, Caddy, etc.) **inside the VM** — apt install anything you need. Add TLS via Let's Encrypt or Cloudflare proxying.
 
 ## License
 
