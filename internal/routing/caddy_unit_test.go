@@ -96,8 +96,35 @@ func (s *savedCaddyState) handler() http.HandlerFunc {
 				return
 			}
 			existing := navigateJSON(s.apps, parts)
-			existingArr, _ := existing.([]interface{})
-			setJSON(s.apps, parts, append(existingArr, newVal))
+			// If the target is an array, POST appends to it (Caddy behaviour).
+			// For non-array targets, POST creates or replaces the value.
+			if existingArr, ok := existing.([]interface{}); ok {
+				setJSON(s.apps, parts, append(existingArr, newVal))
+			} else {
+				setJSON(s.apps, parts, newVal)
+			}
+			w.WriteHeader(http.StatusOK)
+
+		case http.MethodPatch:
+			body, _ := io.ReadAll(r.Body)
+			var patchVal interface{}
+			if err := json.Unmarshal(body, &patchVal); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(fmt.Sprintf(`{"error":"%s"}`, err.Error())))
+				return
+			}
+			existing := navigateJSON(s.apps, parts)
+			// Merge if both existing and patch are maps, otherwise replace.
+			if existingMap, ok := existing.(map[string]interface{}); ok {
+				if patchMap, ok := patchVal.(map[string]interface{}); ok {
+					for k, v := range patchMap {
+						existingMap[k] = v
+					}
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+			}
+			setJSON(s.apps, parts, patchVal)
 			w.WriteHeader(http.StatusOK)
 
 		case http.MethodDelete:
@@ -298,7 +325,7 @@ func TestAddRoute_PostEnsuresServerFirst(t *testing.T) {
 	state := newSavedCaddyState()
 	newCaddyTestServer(t, state.handler())
 
-	err := AddRoute("test-addroute.example.com", "10.0.1.1", 8080)
+	err := AddRoute("test-proj", "test-addroute.example.com", "10.0.1.1", 8080)
 	if err != nil {
 		t.Fatalf("AddRoute should not error, got: %v", err)
 	}
@@ -334,7 +361,7 @@ func TestAddRoute_ExistingServerReused(t *testing.T) {
 	})
 	newCaddyTestServer(t, state.handler())
 
-	err := AddRoute("new-route.example.com", "10.0.2.1", 3000)
+	err := AddRoute("test-proj-2", "new-route.example.com", "10.0.2.1", 3000)
 	if err != nil {
 		t.Fatalf("AddRoute should not error, got: %v", err)
 	}

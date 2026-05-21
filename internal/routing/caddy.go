@@ -36,10 +36,9 @@ type RouteInfo struct {
 	Domain  string
 }
 
-// EnsureServer makes sure the Caddy HTTP server config exists for umu,
-// listens on both :80 and :443, and has automatic HTTPS enabled.
+// EnsureServer makes sure the Caddy HTTP server config exists for umu and
+// listens on both :80 and :443. Caddy enables automatic HTTPS by default.
 func EnsureServer() error {
-	// Check if the server already exists.
 	resp, err := http.Get(CaddyAdminAPI + "/config/apps/http/servers/umu")
 	if err != nil {
 		return fmt.Errorf("caddy API request: %w", err)
@@ -48,14 +47,22 @@ func EnsureServer() error {
 	resp.Body.Close()
 
 	if resp.StatusCode == 200 && string(body) != "null" && len(body) > 2 {
-		if err := patchServerListen(); err != nil {
-			return err
-		}
-		return ensureAutoHTTPS()
+		return patchServerListen()
 	}
 
+	if err := putServer([]string{":80", ":443"}); err != nil {
+		if err := putServer([]string{":80"}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// putServer creates or replaces the umu HTTP server config with the given listen addresses.
+func putServer(listen []string) error {
 	serverCfg := map[string]interface{}{
-		"listen": []string{":80", ":443"},
+		"listen": listen,
 		"routes": []interface{}{},
 	}
 
@@ -70,7 +77,7 @@ func EnsureServer() error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err = http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("caddy API request: %w", err)
 	}
@@ -81,7 +88,7 @@ func EnsureServer() error {
 		return fmt.Errorf("caddy seed config error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	return ensureAutoHTTPS()
+	return nil
 }
 
 // patchServerListen ensures the existing umu server listens on :80 and :443.
@@ -101,29 +108,6 @@ func patchServerListen() error {
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("caddy listen patch error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-	return nil
-}
-
-// ensureAutoHTTPS enables Caddy's automatic HTTPS on the umu server:
-// TLS certificates via Let's Encrypt and HTTP→HTTPS redirects.
-// Idempotent — safe to call on every route add.
-func ensureAutoHTTPS() error {
-	url := CaddyAdminAPI + "/config/apps/http/servers/umu/auto_https"
-	body := bytes.NewReader([]byte(`{"disable_redirects":false}`))
-	req, err := http.NewRequest(http.MethodPatch, url, body)
-	if err != nil {
-		return fmt.Errorf("create auto_https patch: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("caddy auto_https patch: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("caddy auto_https error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
