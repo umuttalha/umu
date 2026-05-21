@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/umuttalha/umu/internal/config"
 )
 
 const maxKernelArgsLen = 2048
@@ -126,7 +128,11 @@ func init() {
 	SocketDir = filepath.Join(dataDir, "sockets")
 	SharedRootImage = filepath.Join(dataDir, "images", "python-base.ext4")
 
-	CNIGlobalPrefix6 = os.Getenv("UMU_GLOBAL_PREFIX6")
+	if cfg, err := config.Load(); err == nil && cfg.DNS.GlobalPrefix6 != "" {
+		CNIGlobalPrefix6 = cfg.DNS.GlobalPrefix6
+	} else {
+		CNIGlobalPrefix6 = os.Getenv("UMU_GLOBAL_PREFIX6")
+	}
 }
 
 const (

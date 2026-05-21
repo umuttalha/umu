@@ -40,16 +40,24 @@ provider = "s3"                                          # always "s3"
 provider = "cloudflare"                                  # always "cloudflare"
 # api_token = "<cloudflare-api-token>"                    # Create at https://dash.cloudflare.com/profile/api-tokens
 # zone_id = "<cloudflare-zone-id>"                        # Found in Cloudflare dashboard → zone overview (right sidebar)
-# base_domain = "example.com"                              # Optional: auto-appended to short project names for DNS/Caddy
+# base_domain = "example.com"                              # Appended to short project names for DNS/Caddy
+# host_ipv4 = "1.2.3.4"                                   # Optional: bare-metal public IPv4 (auto-detected if empty)
+# global_prefix6 = "2001:db8:abcd"                        # Optional: routed /64 IPv6 prefix (auto-detected if empty)
 
 # How to get a Cloudflare API token:
 #   1. Go to https://dash.cloudflare.com/profile/api-tokens
 #   2. Create Token → "Edit zone DNS" template
-#   3. Select your zone (umut.space)
+#   3. Select your zone (example.com)
 #   4. Copy the token
 # How to get your zone ID:
 #   1. Go to your domain in Cloudflare dashboard
 #   2. Zone ID is in the right sidebar under "API"
+
+# host_ipv4 and global_prefix6 are optional. If empty, umu auto-detects
+# them from the host's network interface (eth0 by default).
+# Set them manually if auto-detection picks the wrong interface.
+# When set, the daemon creates ssh.<base_domain> DNS records on startup
+# so you can reach the bare metal via e.g. ssh root@ssh.example.com.
 
 # ── How to get an R2 bucket ─────────────────────────────────────────
 #   1. Cloudflare Dashboard → R2 → Create bucket
@@ -65,7 +73,7 @@ provider = "cloudflare"                                  # always "cloudflare"
 #   4. Endpoint is shown in the bucket details page.
 
 # ── Minimal working config (Cloudflare R2 + DNS) ─────────────────────
-# [[storage]
+# [storage]
 # provider = "s3"
 # endpoint = "https://abc123.r2.cloudflarestorage.com"
 # bucket = "umut-backups"
@@ -77,9 +85,6 @@ provider = "cloudflare"                                  # always "cloudflare"
 # provider = "cloudflare"
 # api_token = "xxx"
 # zone_id = "xxx"
-
-# ── Global IPv6 prefix (optional — for public VM IPs) ──────────────────
-# Set via environment variable UMU_GLOBAL_PREFIX6, not in this file.
-# Add to /etc/systemd/system/umu.service:
-#   Environment=UMU_GLOBAL_PREFIX6=2001:db8:abcd
-# This is your server's routed /64 prefix. VMs get public IPv6 from this.
+# base_domain = "example.com"
+# # host_ipv4 = "1.2.3.4"                                   # optional — auto-detected
+# # global_prefix6 = "2001:db8:abcd"                        # optional — auto-detected

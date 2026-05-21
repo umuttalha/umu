@@ -22,6 +22,8 @@ type DNSConfig struct {
 	APIToken   string `toml:"api_token"`
 	ZoneID     string `toml:"zone_id"`
 	BaseDomain string `toml:"base_domain"`
+	HostIPv4   string `toml:"host_ipv4"`     // optional — auto-detected if empty
+	GlobalPrefix6 string `toml:"global_prefix6"` // optional — auto-detected if empty
 }
 
 type Config struct {
@@ -31,6 +33,9 @@ type Config struct {
 
 func path() string {
 	home, _ := os.UserHomeDir()
+	if home == "" {
+		home = "/root"
+	}
 	return filepath.Join(home, ".umu", "umu.toml")
 }
 

@@ -111,6 +111,39 @@ func (c *Client) Setup(projectName, ipv6 string) error {
 	return err
 }
 
+func (c *Client) SetupA(domain, ipv4 string) error {
+	listBody, err := c.do("GET", fmt.Sprintf("/zones/%s/dns_records?type=A&name=%s", c.zoneID, domain), nil)
+	if err != nil {
+		return err
+	}
+
+	var existing listResponse
+	json.Unmarshal(listBody, &existing)
+
+	if len(existing.Result) > 0 {
+		recordID := existing.Result[0].ID
+		req := recordRequest{
+			Type:    "A",
+			Name:    domain,
+			Content: ipv4,
+			TTL:     120,
+			Proxied: false,
+		}
+		_, err := c.do("PUT", fmt.Sprintf("/zones/%s/dns_records/%s", c.zoneID, recordID), req)
+		return err
+	}
+
+	req := recordRequest{
+		Type:    "A",
+		Name:    domain,
+		Content: ipv4,
+		TTL:     120,
+		Proxied: false,
+	}
+	_, err = c.do("POST", fmt.Sprintf("/zones/%s/dns_records", c.zoneID), req)
+	return err
+}
+
 func (c *Client) Teardown(projectName string) error {
 	fullName := projectName
 

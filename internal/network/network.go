@@ -32,6 +32,75 @@ func DetectHostInterface() string {
 	return HostInterface
 }
 
+// DetectHostIPv4 returns the host's global unicast IPv4 address on HostInterface.
+func DetectHostIPv4() string {
+	out, err := exec.Command("ip", "-4", "-o", "addr", "show", "dev", HostInterface).Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		// "2: eth0    inet 88.99.61.148/26 ..."
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "inet" && i+1 < len(fields) {
+				cidr := fields[i+1]
+				ip := strings.SplitN(cidr, "/", 2)[0]
+				if ip != "" && ip != "127.0.0.1" {
+					return ip
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// DetectHostIPv6 returns the host's global unicast IPv6 address on HostInterface.
+func DetectHostIPv6() string {
+	out, err := exec.Command("ip", "-6", "-o", "addr", "show", "dev", HostInterface).Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "inet6" && i+1 < len(fields) {
+				cidr := fields[i+1]
+				ip := strings.SplitN(cidr, "/", 2)[0]
+				// Global unicast IPv6 starts with 2 or 3
+				if ip != "" && (ip[0] == '2' || ip[0] == '3') {
+					return ip
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// DetectGlobalPrefix6 returns the /64 global IPv6 prefix on HostInterface.
+func DetectGlobalPrefix6() string {
+	out, err := exec.Command("ip", "-6", "-o", "addr", "show", "dev", HostInterface).Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "inet6" && i+1 < len(fields) {
+				cidr := fields[i+1]
+				ip := strings.SplitN(cidr, "/", 2)[0]
+				if ip != "" && (ip[0] == '2' || ip[0] == '3') {
+					// Parse the address into groups, return first 4 groups (/64 prefix)
+					groups := strings.Split(ip, ":")
+					if len(groups) >= 4 {
+						return strings.Join(groups[:4], ":")
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func init() {
 	HostInterface = DetectHostInterface()
 	EnsureSharedBridge()

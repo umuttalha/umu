@@ -7,17 +7,21 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/umuttalha/umu/internal/config"
+	"github.com/umuttalha/umu/internal/network"
 	proj "github.com/umuttalha/umu/internal/project"
 	"github.com/umuttalha/umu/internal/routing"
 	"github.com/umuttalha/umu/internal/state"
 )
 
 func hostGlobalIPv6() string {
-	prefix := os.Getenv("UMU_GLOBAL_PREFIX6")
-	if prefix == "" {
-		return ""
+	cfg, err := config.Load()
+	if err == nil && cfg.DNS.GlobalPrefix6 != "" {
+		return cfg.DNS.GlobalPrefix6 + "::2"
 	}
-	return prefix + "::2"
+	if prefix := os.Getenv("UMU_GLOBAL_PREFIX6"); prefix != "" {
+		return prefix + "::2"
+	}
+	return network.DetectHostIPv6()
 }
 
 func fqdnDomain(cfg *config.Config, name string) string {
