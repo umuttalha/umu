@@ -16,7 +16,7 @@ var rootCmd = &cobra.Command{
 Deploy isolated Firecracker microVMs with full Ubuntu 24.04,
 dedicated IPv6, and SSH access.
 
-  umu deploy myserver      Deploy a new VM
+  umu deploy myserver --cpus 2 --memory 512 --disk 20    Deploy a VM with CPU/memory/disk limits
   umu list                 List all running VMs
   umu htop                 Live CPU/memory per VM
   umu status myserver      View VM details (IPs, PID, disk)
