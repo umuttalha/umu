@@ -10,6 +10,7 @@ import (
 	"github.com/umuttalha/umu/internal/config"
 	"github.com/umuttalha/umu/internal/metadata"
 	"github.com/umuttalha/umu/internal/network"
+	"github.com/umuttalha/umu/internal/state"
 )
 
 var daemonCmd = &cobra.Command{
@@ -31,6 +32,8 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	ensureHostDNS()
 
 	metadata.EnsureRunning()
+
+	reconcilePorts()
 
 	fmt.Println("  ✓ Daemon ready")
 
@@ -134,4 +137,31 @@ func resolveHostIPv6(cfg *config.Config) string {
 		return ip
 	}
 	return ""
+}
+
+func reconcilePorts() {
+	store, err := state.NewStore()
+	if err != nil {
+		fmt.Printf("  warning: cannot load state for port reconciliation: %v\n", err)
+		return
+	}
+
+	projects := store.List()
+	reopened := 0
+
+	for _, p := range projects {
+		for _, svc := range p.Services {
+			for _, port := range svc.OpenPorts {
+				if err := network.OpenPort(svc.GuestIPv4, svc.GlobalIP, port); err != nil {
+					fmt.Printf("  warning: reopen port %d for %s: %v\n", port, p.Name, err)
+				} else {
+					reopened++
+				}
+			}
+		}
+	}
+
+	if reopened > 0 {
+		fmt.Printf("  → Re-opened %d port(s) from state\n", reopened)
+	}
 }

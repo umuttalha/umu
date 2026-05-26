@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,6 +27,7 @@ var (
 	deploySSHKey string
 	deployExpose bool
 	deployDomain string
+	deployPorts  string
 )
 
 var deployCmd = &cobra.Command{
@@ -48,6 +51,7 @@ func init() {
 	deployCmd.Flags().StringVar(&deploySSHKey, "ssh-key", "", "path to SSH public key for VM access")
 	deployCmd.Flags().BoolVar(&deployExpose, "expose", false, "expose the VM via Caddy reverse proxy")
 	deployCmd.Flags().StringVar(&deployDomain, "domain", "", "custom domain for the Caddy route (default: <project>.example.com)")
+	deployCmd.Flags().StringVar(&deployPorts, "ports", "", "comma-separated TCP ports to open (e.g. 5432,6379)")
 	rootCmd.AddCommand(deployCmd)
 }
 
@@ -231,6 +235,26 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			fmt.Printf(" warning: caddy route failed: %v\n", err)
 		} else {
 			fmt.Printf(" exposed at %s\n", routeHostname)
+		}
+	}
+
+	// Open TCP ports if specified
+	if deployPorts != "" {
+		for _, portStr := range strings.Split(deployPorts, ",") {
+			portStr = strings.TrimSpace(portStr)
+			if portStr == "" {
+				continue
+			}
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				fmt.Printf(" warning: invalid port %q, skipping\n", portStr)
+				continue
+			}
+			if err := network.OpenPort(svcState.GuestIPv4, svcState.GlobalIP, port); err != nil {
+				fmt.Printf(" warning: open port %d: %v\n", port, err)
+			} else {
+				svcState.OpenPorts = append(svcState.OpenPorts, port)
+			}
 		}
 	}
 

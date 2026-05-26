@@ -103,6 +103,15 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// 3.5. Close open ports
+		if len(svc.OpenPorts) > 0 {
+			fmt.Printf("  ● Closing %d port(s)...", len(svc.OpenPorts))
+			for _, port := range svc.OpenPorts {
+				network.ClosePort(svc.GuestIPv4, svc.GlobalIP, port)
+			}
+			fmt.Printf(" done\n")
+		}
+
 		// 4. Remove TAP interface
 		if svc.TAPDevice != "" {
 			network.DestroyTAP(svc.TAPDevice)

@@ -311,6 +311,57 @@ func RemoveVMFirewall(guestIP, globalIP string) error {
 	return nil
 }
 
+// OpenPort opens a TCP port from the host to a VM, enabling external access.
+// Sets up IPv4 DNAT + FORWARD rules and IPv6 FORWARD accept rules.
+// Rules are INSERTED at position 1 so they take precedence over catch-all DROP rules.
+// Idempotent: existing rules are deleted first to ensure correct position.
+func OpenPort(guestIPv4, globalIP string, port int) error {
+	if guestIPv4 != "" {
+		del := []string{"-t", "nat", "-D", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", port), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", guestIPv4, port)}
+		add := []string{"-t", "nat", "-I", "PREROUTING", "1", "-p", "tcp", "--dport", fmt.Sprintf("%d", port), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", guestIPv4, port)}
+		run("iptables", del...)
+		if err := run("iptables", add...); err != nil {
+			return fmt.Errorf("iptables DNAT port %d: %w", port, err)
+		}
+
+		fwdDel := []string{"-D", "FORWARD", "-d", guestIPv4, "-p", "tcp", "--dport", fmt.Sprintf("%d", port), "-j", "ACCEPT"}
+		fwdAdd := []string{"-I", "FORWARD", "1", "-d", guestIPv4, "-p", "tcp", "--dport", fmt.Sprintf("%d", port), "-j", "ACCEPT"}
+		run("iptables", fwdDel...)
+		if err := run("iptables", fwdAdd...); err != nil {
+			return fmt.Errorf("iptables FORWARD port %d: %w", port, err)
+		}
+	}
+
+	if globalIP != "" && ip6tablesAvailable() {
+		fwd6Del := []string{"-D", "FORWARD", "-d", globalIP, "-p", "tcp", "--dport", fmt.Sprintf("%d", port), "-j", "ACCEPT"}
+		fwd6Add := []string{"-I", "FORWARD", "1", "-d", globalIP, "-p", "tcp", "--dport", fmt.Sprintf("%d", port), "-j", "ACCEPT"}
+		run("ip6tables", fwd6Del...)
+		if err := run("ip6tables", fwd6Add...); err != nil {
+			return fmt.Errorf("ip6tables FORWARD port %d: %w", port, err)
+		}
+	}
+
+	return nil
+}
+
+// ClosePort removes the firewall rules opened by OpenPort.
+func ClosePort(guestIPv4, globalIP string, port int) error {
+	if guestIPv4 != "" {
+		del := []string{"-t", "nat", "-D", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", port), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", guestIPv4, port)}
+		run("iptables", del...)
+
+		fwdDel := []string{"-D", "FORWARD", "-d", guestIPv4, "-p", "tcp", "--dport", fmt.Sprintf("%d", port), "-j", "ACCEPT"}
+		run("iptables", fwdDel...)
+	}
+
+	if globalIP != "" && ip6tablesAvailable() {
+		fwd6Del := []string{"-D", "FORWARD", "-d", globalIP, "-p", "tcp", "--dport", fmt.Sprintf("%d", port), "-j", "ACCEPT"}
+		run("ip6tables", fwd6Del...)
+	}
+
+	return nil
+}
+
 func ip6tablesAvailable() bool {
 	_, err := exec.LookPath("ip6tables")
 	return err == nil

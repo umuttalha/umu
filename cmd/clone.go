@@ -187,6 +187,7 @@ func runClone(cmd *cobra.Command, args []string) error {
 		ServicePort: clonePort,
 		Domain:      cloneDomain,
 		DiskPath:    diskPath,
+		OpenPorts:   append([]int{}, srcSvc.OpenPorts...),
 	}
 
 	vmName := fmt.Sprintf("%s-main", proj.JailerName(dstName))
@@ -218,6 +219,12 @@ func runClone(cmd *cobra.Command, args []string) error {
 
 	if globalIP != "" {
 		network.SetupNDPProxy(globalIP)
+	}
+
+	for _, port := range svcState.OpenPorts {
+		if err := network.OpenPort(svcState.GuestIPv4, svcState.GlobalIP, port); err != nil {
+			fmt.Printf(" warning: open port %d: %v\n", port, err)
+		}
 	}
 
 	fmt.Printf(" done\n")

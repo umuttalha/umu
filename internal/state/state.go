@@ -79,6 +79,7 @@ type Service struct {
 	KernelArgs   string   `json:"kernel_args,omitempty"`
 	ServicePort  int    `json:"service_port"`
 	Domain       string `json:"domain,omitempty"`
+	OpenPorts    []int  `json:"open_ports,omitempty"`
 }
 
 // Store manages persistent project state backed by SQLite.
