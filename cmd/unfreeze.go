@@ -215,7 +215,7 @@ func runUnfreeze(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("start VM: %w", err)
 			}
 			svc.PID = vm.PID
-			svc.SocketPath = vmCfg.SocketPath
+			svc.SocketPath = vm.Config.SocketPath
 			fmt.Printf(" done\n")
 		}
 	}

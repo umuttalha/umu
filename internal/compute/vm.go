@@ -368,21 +368,25 @@ func CreateSnapshot(socketPath, vmName string) error {
 	memDst := filepath.Join(snapDir, memFile)
 	stateDst := filepath.Join(snapDir, stateFile)
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", socketPath)
-			},
-		},
-		Timeout: 30 * time.Second,
+	unixDialer := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", socketPath)
+	}
+	fastClient := &http.Client{
+		Transport: &http.Transport{DialContext: unixDialer},
+		Timeout:   30 * time.Second,
+	}
+	// Snapshot creation writes full VM memory to disk and can take minutes.
+	slowClient := &http.Client{
+		Transport: &http.Transport{DialContext: unixDialer},
+		Timeout:   5 * time.Minute,
 	}
 
 	// Pause the VM before creating snapshot (required by Firecracker v1.0+)
 	pauseReq, _ := http.NewRequest(http.MethodPatch, "http://localhost/vm",
 		strings.NewReader(`{"state":"Paused"}`))
 	pauseReq.Header.Set("Content-Type", "application/json")
-	pauseResp, err := client.Do(pauseReq)
+	pauseResp, err := fastClient.Do(pauseReq)
 	if err != nil {
 		return fmt.Errorf("pause VM for snapshot: %w", err)
 	}
@@ -402,7 +406,7 @@ func CreateSnapshot(socketPath, vmName string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := slowClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("create snapshot: %w", err)
 	}
@@ -417,7 +421,7 @@ func CreateSnapshot(socketPath, vmName string) error {
 	resumeReq, _ := http.NewRequest(http.MethodPatch, "http://localhost/vm",
 		strings.NewReader(`{"state":"Resumed"}`))
 	resumeReq.Header.Set("Content-Type", "application/json")
-	resumeResp, resumeErr := client.Do(resumeReq)
+	resumeResp, resumeErr := fastClient.Do(resumeReq)
 	if resumeErr != nil {
 		fmt.Printf(" warning: resume VM after snapshot: %v\n", resumeErr)
 	}
