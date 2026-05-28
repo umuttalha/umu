@@ -16,6 +16,7 @@ Turns a single bare-metal server into your own VM platform. Each `umu deploy` cr
 - **Dual IPv6** — ULA for internal, global `/64` for external SSH/HTTP
 - **SSH via hostname** — auto-created DNS AAAA record (`{name}.example.com`)
 - **Web routing** — expose any VM port with `umu route add`, Caddy handles TLS
+- **TCP port forwarding** — open any port with `umu port open` (PostgreSQL, Redis, etc.)
 - **Freeze/unfreeze** — snapshot memory to disk, restore in ~100ms
 - **Clone** — duplicate a VM locally, like `git clone` for VMs
 - **S3 archival** — push/load VM disks to R2, B2, or AWS S3
@@ -65,6 +66,9 @@ umu ssh myserver
 | `umu route list` | List all HTTP routes |
 | `umu route remove <domain>` | Remove one HTTP route |
 | `umu unexpose <name>` | Remove Caddy route, keep VM |
+| `umu port open <name> <port>` | Forward a TCP port to a VM (e.g. 5432 for PostgreSQL) |
+| `umu port close <name> <port>` | Remove a TCP port forward |
+| `umu port list [name]` | List open TCP ports across all VMs |
 | `umu destroy <name>` | Tear down and release resources |
 
 ### Deploy Flags
@@ -78,6 +82,7 @@ umu ssh myserver
 | `--port` | `0` | HTTP port for Caddy routing |
 | `--expose` | `false` | Expose VM via Caddy reverse proxy |
 | `--domain` | — | Custom domain for the route |
+| `--ports` | — | Comma-separated TCP ports to open (e.g. `5432,6379`) |
 
 ### Clone Flags
 
@@ -178,6 +183,43 @@ umu route add myapp myapp.com --port 3000
 
 Caddy matches the Host header and proxies to the VM. TLS is automatic via Let's Encrypt.
 
+## TCP Port Forwarding
+
+Open arbitrary TCP ports from the host to a VM — useful for databases, message queues, and other non-HTTP services.
+
+```bash
+# Open PostgreSQL and Redis at deploy time
+umu deploy mydb --cpus 4 --memory 16384 --ports 5432,6379
+
+# Or open/close ports on a running VM
+umu port open mydb 5432
+umu port open mydb 6379
+umu port close mydb 6379
+```
+
+**How it works:**
+- **IPv4**: Adds `iptables` DNAT rules in PREROUTING to forward host:port → VM:port, plus FORWARD accept rules inserted before catch-all DROP
+- **IPv6**: Adds `ip6tables` FORWARD accept rules targeting the VM's global IPv6
+- **Persistence**: Open ports are stored in state and re-applied on daemon restart
+- **Cleanup**: Ports are automatically closed on `umu destroy` and preserved across `umu clone`
+
+Connect from outside:
+```bash
+psql -h <host-ip> -p 5432 -U myuser mydb
+# or via IPv6
+psql -h <vm-global-ipv6> -p 5432 -U myuser mydb
+```
+
+`umu port list` shows all open ports across your VMs:
+```
+  PROJECT            PORTS
+  ─────────          ─────
+  mydb               5432, 6379
+  appdatalayer       5432
+
+  3 port(s) open
+```
+
 ## Disk Layout
 
 ```
@@ -240,14 +282,21 @@ umu deploy myserver --cpus 2 --memory 4096 --disk 20
     ├─ 5. Start Firecracker microVM inside jailer (chroot + seccomp)
     ├─ 6. Setup NDP proxy for global IPv6 access
     ├─ 7. Auto-create Cloudflare DNS AAAA record ({name}.example.com → VM IP)
-    └─ 8. Optionally add Caddy route (--port + --expose)
+    ├─ 8. Optionally add Caddy route (--port + --expose)
+    └─ 9. Optionally open TCP ports (--ports 5432,6379)
 
 umu route add myserver --port 8080
     ├─ 1. Flip DNS AAAA → host IP (so Caddy intercepts)
     ├─ 2. Add Caddy reverse_proxy route (domain → VM:8080)
     └─ 3. Caddy auto_https issues TLS cert, redirects HTTP→HTTPS
 
-State: SQLite (state.db) — tracks VMs, IPs, PIDs, domains
+umu port open myserver 5432
+    ├─ 1. iptables -t nat -I PREROUTING → DNAT host:5432 → VM:5432
+    ├─ 2. iptables -I FORWARD → ACCEPT to VM:5432
+    ├─ 3. ip6tables -I FORWARD → ACCEPT to VM global IPv6:5432
+    └─ 4. Persist to state.db (re-applied on daemon restart)
+
+State: SQLite (state.db) — tracks VMs, IPs, PIDs, domains, open ports
 Config: ~/.umu/umu.toml — S3 credentials + Cloudflare DNS API token
 ```
 
